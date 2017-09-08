@@ -1,7 +1,6 @@
 #![feature(ascii_ctype)]
 #![feature(conservative_impl_trait)]
 
-use std::env;
 use std::io::BufReader;
 use std::io::BufRead;
 use std::fs::File;
@@ -29,8 +28,26 @@ use cpuprofiler::PROFILER;
 extern crate fnv;
 use fnv::FnvHashSet; //Reduced 14x13 from 20 to 16 secs.
 
+#[macro_use]
+extern crate clap;
+
 fn main() {
-  let words_path = env::args().nth(1).expect("No word file passed");
+  let config = clap_app!(rectangle =>
+    (@arg WORDS: +required "File to pull words from")
+    (@arg skip: --skip +takes_value "Skip areas greater than this parameter")
+    (@arg min_len: --min_len + takes_value "Minimum word length")
+    (@arg max_len: --max_len + takes_value "Maximum word length")
+  ).get_matches();
+  let words_path = config.value_of("WORDS").expect("No words file");
+  let skip : Option<usize> = config.value_of("skip").map(|s| s.parse().expect("Could not parse skip"));
+  let min_len = config.value_of("min_len").map_or(0, |s| s.parse().expect("Could not parse min_len"));
+  let max_len = config.value_of("max_len").map(|s| s.parse().expect("Could not parse max_len"));
+  let max_len = match (max_len, skip) {
+    (Some(l), Some(r)) => Some(std::cmp::max(l,r)),
+    (x, None) => x,
+    (None, x) => x,
+  };
+  //let words_path = env::args().nth(1).expect("No word file passed");
   let f = File::open(words_path).expect("Could not open file");
   let file = BufReader::new(&f);
   let mut counts : HashMap<usize, i32> = HashMap::new();
@@ -38,8 +55,11 @@ fn main() {
   let mut indices : HashMap<usize, Vec<FnvHashSet<usize>>> = HashMap::new();
   let words : Vec<String> = file.lines()
     .map(|line| line.expect("Not a line or something"))
-    .filter(|word| word.is_ascii_lowercase())
-    .collect();
+    .filter(|word|
+      word.is_ascii_lowercase() &&
+      word.len() >= min_len &&
+      max_len.map_or(true, |max| word.len() < max)
+    ).collect();
   let mut words_pb = ProgressBar::new(words.len() as u64);
   println!("Preprocessing words");
   for (word_ix, word) in words.iter().enumerate() {
@@ -59,11 +79,6 @@ fn main() {
     words_pb.inc();
   };
   words_pb.finish_print("Preprocessing complete");
-  /*
-  for (k, v) in counts.iter() {
-    println!("{}: {}", k, v);
-  };
-  */
   for (&k, index) in indices.iter() {
     println!("{}: {}", k, counts[&k]);
     for char_index in index.iter(){
@@ -76,7 +91,7 @@ fn main() {
   let mut dims = Vec::new();
   for x in counts.keys() {
     for y in counts.keys() {
-      if x >= y {
+      if (x >= y) && skip.map_or(true, |s| x*y < s) {
         dims.push((x,y));
       }
     }

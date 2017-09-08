@@ -1,0 +1,5 @@
+/target/
+**/*.rs.bk
+profiling*
+perf.data
+perf.data.old

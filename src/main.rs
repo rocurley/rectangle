@@ -1,5 +1,5 @@
-#![feature(ascii_ctype)]
 #![feature(conservative_impl_trait)]
+#![feature(ascii_ctype)]
 
 use std::io::BufReader;
 use std::io::BufRead;
@@ -7,7 +7,6 @@ use std::fs::File;
 use std::ascii::AsciiExt;
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use std::cmp::Ordering;
 
@@ -17,16 +16,13 @@ extern crate itertools;
 use itertools::join;
 
 extern crate ndarray;
-use ndarray::{Array, Array2, Axis};
+use ndarray::{Array, Array2, Axis, Zip};
 
 extern crate pbr;
 use pbr::ProgressBar;
 
 extern crate cpuprofiler;
 use cpuprofiler::PROFILER;
-
-extern crate fnv;
-use fnv::FnvHashSet; //Reduced 14x13 from 20 to 16 secs.
 
 #[macro_use]
 extern crate clap;
@@ -50,47 +46,44 @@ fn main() {
   //let words_path = env::args().nth(1).expect("No word file passed");
   let f = File::open(words_path).expect("Could not open file");
   let file = BufReader::new(&f);
-  let mut counts : HashMap<usize, i32> = HashMap::new();
-  let mut words_by_length : HashMap<usize, FnvHashSet<usize>> = HashMap::new();
-  let mut indices : HashMap<usize, Vec<FnvHashSet<usize>>> = HashMap::new();
-  let words : Vec<String> = file.lines()
+  let words : Vec<Vec<char>>;
+  let mut words_by_length : HashMap<usize, Vec<& Vec<char>>> = HashMap::new();
+  let mut indices : HashMap<usize, Vec<Vec<& Vec<char>>>> = HashMap::new();
+  words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
       word.is_ascii_lowercase() &&
       word.len() >= min_len &&
       max_len.map_or(true, |max| word.len() < max)
-    ).collect();
+    ).map(|word| word.chars().collect())
+    .collect();
   let mut words_pb = ProgressBar::new(words.len() as u64);
   println!("Preprocessing words");
-  for (word_ix, word) in words.iter().enumerate() {
+  for word in words.iter() {
     let l = word.len();
 
-    let count = counts.entry(l).or_insert(0);
-    *count += 1;
+    let same_length = words_by_length.entry(l).or_insert(Vec::new());
+    same_length.push(word);
 
-    let same_length = words_by_length.entry(l).or_insert(FnvHashSet::default());
-    same_length.insert(word_ix);
-
-    let index = indices.entry(l).or_insert(vec![FnvHashSet::default(); 26*l]);
-    for (pos, c) in word.chars().enumerate() {
-      index[ix(pos, c)].insert(word_ix);
+    let index = indices.entry(l).or_insert(vec![Vec::new(); 26*l]);
+    for (pos, &c) in word.iter().enumerate() {
+      index[ix(pos, c)].push(word);
     }
 
     words_pb.inc();
   };
   words_pb.finish_print("Preprocessing complete");
   for (&k, index) in indices.iter() {
-    println!("{}: {}", k, counts[&k]);
+    println!("{}: {}", k, words_by_length[&k].len());
     for char_index in index.iter(){
-      for &ix in char_index.iter() {
-        let word = & words[ix];
-        assert!(word.len() == k, "{} found in index for {}", word, k);
+      for word in char_index.iter() {
+        assert!(word.len() == k, "{:?} found in index for {}", word, k);
       }
     }
   }
   let mut dims = Vec::new();
-  for x in counts.keys() {
-    for y in counts.keys() {
+  for x in words_by_length.keys() {
+    for y in words_by_length.keys() {
       if (x >= y) && skip.map_or(true, |s| x*y < s) {
         dims.push((x,y));
       }
@@ -112,7 +105,7 @@ fn main() {
           break;
         },
         Some(rect) => {
-          for new_rect in step_word_rectangle(& indices, & words_by_length, & words, rect) {
+          for new_rect in step_word_rectangle(& indices, & words_by_length, rect) {
             if complete_word_rectangle(& new_rect){
               println!("Found:\n{}", show_word_rectangle(& new_rect));
               return;
@@ -147,14 +140,14 @@ fn ix(pos : usize, c : char) -> usize {
 }
 
 #[derive(Debug)]
-enum WordMatch {
+enum WordMatch <'a>{
   Unconstrained,
   Filled,
-  Matches { matches: Vec<usize>}
+  Matches { matches: Vec<&'a Vec<char>>}
 }
 use WordMatch::*;
 
-impl Ord for WordMatch {
+impl<'a> Ord for WordMatch<'a> {
   fn cmp(&self, other: & WordMatch) -> Ordering {
     match(self, other) {
       (& Filled, & Filled) => Ordering::Equal,
@@ -168,13 +161,13 @@ impl Ord for WordMatch {
   }
 }
 
-impl PartialOrd for WordMatch {
+impl<'a> PartialOrd for WordMatch<'a> {
   fn partial_cmp(&self, other: &WordMatch) -> Option<Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl PartialEq for WordMatch {
+impl<'a> PartialEq for WordMatch<'a> {
   fn eq(&self, other: & WordMatch) -> bool {
     match self.cmp(other) {
       Ordering::Equal => true,
@@ -183,59 +176,31 @@ impl PartialEq for WordMatch {
   }
 }
 
-impl Eq for WordMatch {}
+impl<'a> Eq for WordMatch<'a> {}
 
-fn _fold_hash_sets<'a, T, S>(mut sets : Vec<& 'a HashSet<T,S>>) -> Option<Vec<T>> where
-  T : std::cmp::Eq  + std::hash::Hash + std::clone::Clone,
-  S : std::hash::BuildHasher
-  {
-    sets.sort_by_key(|ref set| set.len());
-    sets.split_first().map(|(& head, tail)| {
-      let mut out : Vec<T> = head.iter().cloned().collect();//collect: 23%
-      for set in tail{//retain: 12%
-        out.retain(|x| set.contains(x));//contains: 43%
-      }
-      out
-    })
-  }
-
-fn fold_hash_sets<'a, T, S>(mut sets : Vec<& 'a HashSet<T,S>>) -> Option<Vec<T>> where
-  T : std::cmp::Eq  + std::hash::Hash + std::clone::Clone,
-  S : std::hash::BuildHasher
-  {
-    sets.sort_by_key(|ref set| set.len());
-    sets.split_first().map(|(& head, tail)| {
-      let mut out = Vec::new();
-      'outer: for x in head.iter(){//next: 47% (!?)
-        for set in tail{
-          if !set.contains(x){//contains: 19%
-            continue 'outer;
-          }
-        }
-        out.push(x.clone());//push: 16%
-      }
-      out
-    })
-  }
-
-fn fit_word<'a, I>(to_fill : I, index : & Vec<FnvHashSet<usize>>) -> WordMatch where
+fn fit_word<'a, 'b, 'w, I>(to_fill : I, index : &'b Vec<Vec<& 'w Vec<char>>>) -> WordMatch<'w> where
   I : Iterator<Item = & 'a Option<char>>{
-  //let mut matches : Option<FnvHashSet<usize>> = None;
   let mut full = true;
-  let mut constraints = Vec::new();
+  let mut constraints : Vec<(usize, char)> = Vec::new();
   for (pos,&c_option) in to_fill.enumerate() {
     match c_option {
       Some(c) => {
-        constraints.push(& index[ix(pos, c)]);
+        constraints.push((pos, c));
       }
       None => full = false
     };
   };
-  let matches = fold_hash_sets(constraints);
-  match (matches, full) {
+  constraints.sort_by_key(|&(pos, c)| index[ix(pos, c)].len());//Strictest first
+  match (constraints.split_first(), full) {
     (_, true) => WordMatch::Filled,
     (None, false) => WordMatch::Unconstrained,
-    (Some(matches), false) => WordMatch::Matches{matches : matches},
+    (Some((&(seed_pos, seed_c), tail_constraints)), false) => {
+      let mut matches : Vec<& 'w Vec<char>> = index[ix(seed_pos, seed_c)].clone();
+      for &(pos, c) in tail_constraints{
+        matches.retain(|word| word[pos] == c);
+      }
+      WordMatch::Matches{matches : matches}
+    },
   }
 }
 
@@ -250,13 +215,11 @@ fn complete_word_rectangle(word_rectangle : & Array2<Option<char>>) -> bool {
   word_rectangle.iter().all(|x| x.is_some())
 }
 
-fn step_word_rectangle<'a>(
-  indices : & HashMap<usize, Vec<FnvHashSet<usize>>>,
-  words_by_length : & HashMap<usize, FnvHashSet<usize>>,
-  words : & 'a Vec<String>,
+fn step_word_rectangle<'a, 'w>(
+  indices : & HashMap<usize, Vec<Vec<&'w Vec<char>>>>,
+  words_by_length : & 'a HashMap<usize, Vec<&'w Vec<char>>>,
   word_square : Array2<Option<char>>
-  ) //-> impl Iterator<Item = Array2<Option<char>>> + 'a
-  -> Box<Iterator<Item = Array2<Option<char>>> + 'a>
+  ) -> Box<Iterator<Item = Array2<Option<char>>> + 'a>
   {
   let width = word_square.shape()[1];
   let height = word_square.shape()[0];
@@ -290,33 +253,35 @@ fn step_word_rectangle<'a>(
   if (& best_row_matches, unfiltered_row_candidates.len()) <
     (& best_col_matches, unfiltered_col_candidates.len()) {
       //println!("Adding row");
-      let matches : Vec<usize> = match best_row_matches {
+      let matches : Vec<& Vec<char>> = match best_row_matches {
         Filled => panic!("Ran step_word_rectangle on full rectangle"),
         Unconstrained => unfiltered_row_candidates.iter().cloned().collect(),
         Matches{matches:m} => m,
       };
-      Box::new(matches.into_iter().map(move |word_ix| {
+      Box::new(matches.into_iter().map(move |word| {
         let mut new_square = word_square.clone();
         {
-          let mut target = new_square.subview_mut(Axis(0),best_row_ix);
-          let word = Array::from_vec(words[word_ix].chars().map(Some).collect());
-          target.assign(& word);
+          let target = new_square.subview_mut(Axis(0),best_row_ix);
+          Zip::from(word)
+            .and(target)
+            .apply(|& word_c, target_slot| *target_slot = Some(word_c));
         };
         new_square
       }))
   } else {
       //println!("Adding col");
-      let matches : Vec<usize> = match best_col_matches {
+      let matches : Vec<& Vec<char>> = match best_col_matches {
         Filled => panic!("Ran step_word_rectangle on full rectangle"),
         Unconstrained => unfiltered_col_candidates.iter().cloned().collect(),
         Matches{matches:m} => m,
       };
-      Box::new(matches.into_iter().map(move |word_ix| {
+      Box::new(matches.into_iter().map(move |word| {
         let mut new_square = word_square.clone();
         {
-          let mut target = new_square.subview_mut(Axis(1),best_col_ix);
-          let word = Array::from_vec(words[word_ix].chars().map(Some).collect());
-          target.assign(& word);
+          let target = new_square.subview_mut(Axis(1),best_col_ix);
+          Zip::from(word)
+            .and(target)
+            .apply(|& word_c, target_slot| *target_slot = Some(word_c));
         };
         new_square
       }))

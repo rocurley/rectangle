@@ -47,8 +47,8 @@ fn main() {
   let f = File::open(words_path).expect("Could not open file");
   let file = BufReader::new(&f);
   let words : Vec<Vec<char>>;
-  let mut words_by_length : HashMap<usize, Vec<& Vec<char>>> = HashMap::new();
-  let mut indices : HashMap<usize, Vec<Vec<& Vec<char>>>> = HashMap::new();
+  let mut words_by_length : HashMap<usize, Vec<& [char]>> = HashMap::new();
+  let mut indices : HashMap<usize, Vec<Vec<& [char]>>> = HashMap::new();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
@@ -140,15 +140,15 @@ fn ix(pos : usize, c : char) -> usize {
 }
 
 #[derive(Debug)]
-enum WordMatch <'a>{
+enum WordsMatch <'w>{
   Unconstrained,
   Filled,
-  Matches { matches: Vec<&'a Vec<char>>}
+  Matches { matches: Vec<& 'w[char]>}
 }
-use WordMatch::*;
+use WordsMatch::*;
 
-impl<'a> Ord for WordMatch<'a> {
-  fn cmp(&self, other: & WordMatch) -> Ordering {
+impl<'a> Ord for WordsMatch<'a> {
+  fn cmp(&self, other: & WordsMatch) -> Ordering {
     match(self, other) {
       (& Filled, & Filled) => Ordering::Equal,
       (& Filled, _) => Ordering::Greater,
@@ -161,14 +161,14 @@ impl<'a> Ord for WordMatch<'a> {
   }
 }
 
-impl<'a> PartialOrd for WordMatch<'a> {
-  fn partial_cmp(&self, other: &WordMatch) -> Option<Ordering> {
+impl<'a> PartialOrd for WordsMatch<'a> {
+  fn partial_cmp(&self, other: &WordsMatch) -> Option<Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl<'a> PartialEq for WordMatch<'a> {
-  fn eq(&self, other: & WordMatch) -> bool {
+impl<'a> PartialEq for WordsMatch<'a> {
+  fn eq(&self, other: & WordsMatch) -> bool {
     match self.cmp(other) {
       Ordering::Equal => true,
       _ => false,
@@ -176,9 +176,9 @@ impl<'a> PartialEq for WordMatch<'a> {
   }
 }
 
-impl<'a> Eq for WordMatch<'a> {}
+impl<'a> Eq for WordsMatch<'a> {}
 
-fn fit_word<'a, 'b, 'w, I>(to_fill : I, index : &'b Vec<Vec<& 'w Vec<char>>>) -> WordMatch<'w> where
+fn fit_word<'a, 'b, 'w, I>(to_fill : I, index : &'b Vec<Vec<& 'w[char]>>) -> WordsMatch<'w> where
   I : Iterator<Item = & 'a Option<char>>{
   let mut full = true;
   let mut constraints : Vec<(usize, char)> = Vec::new();
@@ -192,14 +192,14 @@ fn fit_word<'a, 'b, 'w, I>(to_fill : I, index : &'b Vec<Vec<& 'w Vec<char>>>) ->
   };
   constraints.sort_by_key(|&(pos, c)| index[ix(pos, c)].len());//Strictest first
   match (constraints.split_first(), full) {
-    (_, true) => WordMatch::Filled,
-    (None, false) => WordMatch::Unconstrained,
+    (_, true) => WordsMatch::Filled,
+    (None, false) => WordsMatch::Unconstrained,
     (Some((&(seed_pos, seed_c), tail_constraints)), false) => {
-      let mut matches : Vec<& 'w Vec<char>> = index[ix(seed_pos, seed_c)].clone();
+      let mut matches : Vec<& 'w[char]> = index[ix(seed_pos, seed_c)].clone();
       for &(pos, c) in tail_constraints{
         matches.retain(|word| word[pos] == c);
       }
-      WordMatch::Matches{matches : matches}
+      WordsMatch::Matches{matches : matches}
     },
   }
 }
@@ -216,8 +216,8 @@ fn complete_word_rectangle(word_rectangle : & Array2<Option<char>>) -> bool {
 }
 
 fn step_word_rectangle<'a, 'w>(
-  indices : & HashMap<usize, Vec<Vec<&'w Vec<char>>>>,
-  words_by_length : & 'a HashMap<usize, Vec<&'w Vec<char>>>,
+  indices : & HashMap<usize, Vec<Vec<& 'w[char]>>>,
+  words_by_length : & 'a HashMap<usize, Vec<& 'w[char]>>,
   word_square : Array2<Option<char>>
   ) -> Box<Iterator<Item = Array2<Option<char>>> + 'a>
   {
@@ -253,7 +253,7 @@ fn step_word_rectangle<'a, 'w>(
   if (& best_row_matches, unfiltered_row_candidates.len()) <
     (& best_col_matches, unfiltered_col_candidates.len()) {
       //println!("Adding row");
-      let matches : Vec<& Vec<char>> = match best_row_matches {
+      let matches : Vec<& [char]> = match best_row_matches {
         Filled => panic!("Ran step_word_rectangle on full rectangle"),
         Unconstrained => unfiltered_row_candidates.iter().cloned().collect(),
         Matches{matches:m} => m,
@@ -270,7 +270,7 @@ fn step_word_rectangle<'a, 'w>(
       }))
   } else {
       //println!("Adding col");
-      let matches : Vec<& Vec<char>> = match best_col_matches {
+      let matches : Vec<& [char]> = match best_col_matches {
         Filled => panic!("Ran step_word_rectangle on full rectangle"),
         Unconstrained => unfiltered_col_candidates.iter().cloned().collect(),
         Matches{matches:m} => m,

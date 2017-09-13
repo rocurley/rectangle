@@ -154,6 +154,28 @@ fn ix(pos : usize, c : char) -> usize {
   return pos*26+(c as usize - 'a' as usize)
 }
 
+fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
+  let len = v.len();
+  let mut kept = 0;
+  let mut i = len-1;
+  {
+    let s = v.as_mut_slice();
+    if len == 0 {
+      return;
+    }
+
+    while i >= kept && i < len {
+        if f(&s[i]) {
+          s.swap(i, kept);
+          kept += 1;
+        } else {
+          i -= 1;
+        };
+      }
+  }
+  v.truncate(kept);
+}
+
 #[derive(Debug)]
 enum WordsMatch <'a, 'w : 'a>{
   Unconstrained,
@@ -168,8 +190,8 @@ impl <'a, 'w : 'a> WordsMatch<'a, 'w> {
     match *self {
       Unconstrained => Unconstrained,
       Filled => Filled,
-      OwnedMatches{ matches: ref old_matches} => BorrowedMatches {matches: old_matches},
-      BorrowedMatches{ matches : old_matches} => OwnedMatches {matches: old_matches.clone()},
+      OwnedMatches{ ref matches} => BorrowedMatches {matches},
+      BorrowedMatches{ matches } => BorrowedMatches {matches},
     }
   }
 
@@ -179,11 +201,11 @@ impl <'a, 'w : 'a> WordsMatch<'a, 'w> {
     match *self {
       Unconstrained => *self = BorrowedMatches{matches: & index[ix(pos, c)]},
       OwnedMatches {ref mut matches} => {
-        matches.retain(|word| word[pos] == c);
+        unstable_retain(matches, |word| word[pos] == c);
       },
       BorrowedMatches { matches: old_matches} => {
         let mut new_matches = old_matches.clone();
-        new_matches.retain(|word| word[pos] == c);
+        unstable_retain(& mut new_matches, |word| word[pos] == c);
         *self = OwnedMatches { matches : new_matches}
       },
       Filled => {}

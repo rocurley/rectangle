@@ -6,6 +6,9 @@ use std::io::BufRead;
 use std::fs::File;
 use std::ascii::AsciiExt;
 
+extern crate ascii;
+use ascii::{AsciiString, AsciiChar};
+
 use std::collections::HashMap;
 
 use std::cmp::Ordering;
@@ -43,19 +46,18 @@ fn main() {
     (x, None) => x,
     (None, x) => x,
   };
-  //let words_path = env::args().nth(1).expect("No word file passed");
   let f = File::open(words_path).expect("Could not open file");
   let file = BufReader::new(&f);
-  let words : Vec<Vec<char>>;
-  let mut words_by_length : HashMap<usize, Vec<& [char]>> = HashMap::new();
-  let mut indices : HashMap<usize, Vec<Vec<& [char]>>> = HashMap::new();
+  let words : Vec<AsciiString>;
+  let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
+  let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
       word.is_ascii_lowercase() &&
       word.len() >= min_len &&
       max_len.map_or(true, |max| word.len() < max)
-    ).map(|word| word.chars().collect())
+    ).map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
     .collect();
   let mut words_pb = ProgressBar::new(words.len() as u64);
   println!("Preprocessing words");
@@ -63,11 +65,11 @@ fn main() {
     let l = word.len();
 
     let same_length = words_by_length.entry(l).or_insert(Vec::new());
-    same_length.push(word);
+    same_length.push(word.as_slice());
 
     let index = indices.entry(l).or_insert(vec![Vec::new(); 26*l]);
-    for (pos, &c) in word.iter().enumerate() {
-      index[ix(pos, c)].push(word);
+    for (pos, &c) in word.chars().enumerate() {
+      index[ix(pos, c)].push(word.as_slice());
     }
 
     words_pb.inc();
@@ -110,47 +112,13 @@ fn main() {
       None => println!("No rectangle found"),
       Some(rect) => println!("Found:\n{}", show_word_rectangle(& rect)),
     }
-    /*
-    loop {
-      match stack.pop() {
-        None => {
-          let (ref mut pb,_) = pb_tuple.expect("Missing PB at end of loop");
-          pb.finish_print("No rectangle found");
-          break;
-        },
-        Some(rect) => {
-          for new_rect in step_word_rectangle(& indices, & words_by_length, rect) {
-            if complete_word_rectangle(& new_rect){
-              println!("Found:\n{}", show_word_rectangle(& new_rect));
-              return;
-            };
-            stack.push(new_rect);
-          };
-          match pb_tuple {
-            None => {
-              let count = stack.len() as u64;
-              pb_tuple = Some((ProgressBar::new(count),count));
-            },
-            Some((ref mut pb,ref mut trigger)) => {
-              if (stack.len() as u64) < *trigger {
-                *trigger -= 1;
-                assert!(*trigger == stack.len() as u64);
-                pb.inc();
-              }
-            },
-          };
-        },
-      };
-    };
-    */
     let elapsed = start_time.elapsed();
     println!("{:?}", elapsed);
     PROFILER.lock().unwrap().stop().unwrap();
   };
 }
 
-fn ix(pos : usize, c : char) -> usize {
-  assert!(c.is_ascii_lowercase());
+fn ix(pos : usize, c : AsciiChar) -> usize {
   return pos*26+(c as usize - 'a' as usize)
 }
 
@@ -165,13 +133,13 @@ fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
     }
 
     while i >= kept && i < len {
-        if f(&s[i]) {
-          s.swap(i, kept);
-          kept += 1;
-        } else {
-          i -= 1;
-        };
-      }
+      if f(&s[i]) {
+        s.swap(i, kept);
+        kept += 1;
+      } else {
+        i -= 1;
+      };
+    }
   }
   v.truncate(kept);
 }
@@ -180,8 +148,8 @@ fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
 enum WordsMatch <'a, 'w : 'a>{
   Unconstrained,
   Filled,
-  OwnedMatches { matches: Vec<& 'w[char]>},
-  BorrowedMatches { matches: & 'a Vec<& 'w[char]>},
+  OwnedMatches { matches: Vec<& 'w[AsciiChar]>},
+  BorrowedMatches { matches: & 'a Vec<& 'w[AsciiChar]>},
 }
 use WordsMatch::*;
 
@@ -195,9 +163,9 @@ impl <'a, 'w : 'a> WordsMatch<'a, 'w> {
     }
   }
 
-  fn apply_constraint<'b : 'a>(& mut self, index : &'b Vec<Vec<& 'w[char]>>
+  fn apply_constraint<'b : 'a>(& mut self, index : &'b Vec<Vec<& 'w[AsciiChar]>>
     , pos : usize
-    , c : char) {
+    , c : AsciiChar) {
     match *self {
       Unconstrained => *self = BorrowedMatches{matches: & index[ix(pos, c)]},
       OwnedMatches {ref mut matches} => {
@@ -249,7 +217,7 @@ impl<'a, 'w> Eq for WordsMatch<'a, 'w> {}
 
 #[derive(Debug)]
 struct WordRectangle<'a, 'w : 'a> {
-  array : Array2<Option<char>>,
+  array : Array2<Option<AsciiChar>>,
   row_matches : Vec<WordsMatch<'a, 'w>>,
   col_matches : Vec<WordsMatch<'a, 'w>>,
 }
@@ -264,19 +232,19 @@ impl <'a, 'w> WordRectangle<'a, 'w> {
   }
 }
 
-fn show_word_rectangle(word_rectangle : & Array2<Option<char>>) -> String {
+fn show_word_rectangle(word_rectangle : & Array2<Option<AsciiChar>>) -> String {
   let rows = word_rectangle.outer_iter().map(|row|
-    row.iter().map(|c| c.unwrap_or('.')).collect::<String>()
+    row.iter().map(|c| c.map_or('.',|c| c.as_char())).collect::<String>()
   );
   join(rows,"\n")
 }
 
 fn step_word_rectangle<'a, 'w>(
-  indices : & HashMap<usize, Vec<Vec<& 'w[char]>>>,
-  words_by_length : & 'a HashMap<usize, Vec<& 'w[char]>>,
+  indices : & HashMap<usize, Vec<Vec<& 'w[AsciiChar]>>>,
+  words_by_length : & 'a HashMap<usize, Vec<& 'w[AsciiChar]>>,
   word_rectangle : WordRectangle<'a, 'w>,
   show_pb : bool,
-  ) -> Option<Array2<Option<char>>>
+  ) -> Option<Array2<Option<AsciiChar>>>
   {
   let width = word_rectangle.array.shape()[1];
   let height = word_rectangle.array.shape()[0];
@@ -291,7 +259,7 @@ fn step_word_rectangle<'a, 'w>(
       .min_by(|& (_, ref l_matches), & (_, ref r_matches)| l_matches.cmp(r_matches)).expect("Empty cols");
   if (& best_row_matches, unfiltered_row_candidates.len()) <
     (& best_col_matches, unfiltered_col_candidates.len()) {
-      let matches : & [& [char]] = match *best_row_matches {
+      let matches : & [& [AsciiChar]] = match *best_row_matches {
         Filled => return Some(word_rectangle.array),
         Unconstrained => unfiltered_row_candidates,
         OwnedMatches{matches:ref m} => m,
@@ -321,7 +289,7 @@ fn step_word_rectangle<'a, 'w>(
         }
       }
   } else {
-      let matches : & [& [char]] = match *best_col_matches {
+      let matches : & [& [AsciiChar]] = match *best_col_matches {
         Filled => return Some(word_rectangle.array),
         Unconstrained => unfiltered_col_candidates,
         OwnedMatches{matches:ref m} => m,

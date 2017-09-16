@@ -1,5 +1,6 @@
 #![feature(conservative_impl_trait)]
 #![feature(ascii_ctype)]
+#![feature(i128_type)]
 
 use std::io::BufReader;
 use std::io::BufRead;
@@ -15,17 +16,23 @@ use std::cmp::Ordering;
 
 use std::time::Instant;
 
+use std::rc::Rc;
+use std::borrow::Borrow;
+
 extern crate itertools;
 use itertools::join;
 
 extern crate ndarray;
-use ndarray::{Array, Array2, Axis, Zip};
+use ndarray::{Array, Array2, Zip};
 
 extern crate pbr;
 use pbr::ProgressBar;
 
 extern crate cpuprofiler;
 use cpuprofiler::PROFILER;
+
+extern crate fnv;
+use fnv::FnvHashMap;
 
 #[macro_use]
 extern crate clap;
@@ -51,6 +58,7 @@ fn main() {
   let words : Vec<AsciiString>;
   let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
   let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
+  let mut cache : FnvHashMap<(usize, u128) , Rc<[& [AsciiChar]]>> = FnvHashMap::default();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
@@ -108,7 +116,7 @@ fn main() {
     //let mut pb_tuple : Option<(ProgressBar<_>, u64)> = None;
     PROFILER.lock().unwrap().start(format!("profiling/{}x{}.profile", w,h)).unwrap();
     let start_time = Instant::now();
-    match step_word_rectangle(& indices, & words_by_length, start, true) {
+    match step_word_rectangle(& words_by_length, & mut cache, start, true) {
       None => println!("No rectangle found"),
       Some(rect) => println!("Found:\n{}", show_word_rectangle(& rect)),
     }
@@ -144,44 +152,15 @@ fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
   v.truncate(kept);
 }
 
-#[derive(Debug)]
-enum WordsMatch <'a, 'w : 'a>{
+#[derive(Debug, Clone)]
+enum WordsMatch <'w>{
   Unconstrained,
   Filled,
-  OwnedMatches { matches: Vec<& 'w[AsciiChar]>},
-  BorrowedMatches { matches: & 'a Vec<& 'w[AsciiChar]>},
+  BorrowedMatches { matches: Rc<[& 'w[AsciiChar]]>},
 }
 use WordsMatch::*;
 
-impl <'a, 'w : 'a> WordsMatch<'a, 'w> {
-  fn shallow_copy<'b>(& 'b self) -> WordsMatch<'b, 'w> {
-    match *self {
-      Unconstrained => Unconstrained,
-      Filled => Filled,
-      OwnedMatches{ ref matches} => BorrowedMatches {matches},
-      BorrowedMatches{ matches } => BorrowedMatches {matches},
-    }
-  }
-
-  fn apply_constraint<'b : 'a>(& mut self, index : &'b Vec<Vec<& 'w[AsciiChar]>>
-    , pos : usize
-    , c : AsciiChar) {
-    match *self {
-      Unconstrained => *self = BorrowedMatches{matches: & index[ix(pos, c)]},
-      OwnedMatches {ref mut matches} => {
-        unstable_retain(matches, |word| word[pos] == c);
-      },
-      BorrowedMatches { matches: old_matches} => {
-        let mut new_matches = old_matches.clone();
-        unstable_retain(& mut new_matches, |word| word[pos] == c);
-        *self = OwnedMatches { matches : new_matches}
-      },
-      Filled => {}
-    }
-  }
-}
-
-impl<'a, 'w> Ord for WordsMatch<'a, 'w> {
+impl<'w> Ord for WordsMatch<'w> {
   fn cmp(&self, other: & WordsMatch) -> Ordering {
     match(self, other) {
       (& Filled, & Filled) => Ordering::Equal,
@@ -190,21 +169,18 @@ impl<'a, 'w> Ord for WordsMatch<'a, 'w> {
       (& Unconstrained, & Unconstrained) => Ordering::Equal,
       (& Unconstrained, _) => Ordering::Greater,
       (_, & Unconstrained) => Ordering::Less,
-      (& OwnedMatches{matches: ref l}, & OwnedMatches{matches: ref r}) => l.len().cmp(& r.len()),
-      (& BorrowedMatches{matches: l}, & OwnedMatches{matches: ref r}) => l.len().cmp(& r.len()),
-      (& OwnedMatches{matches: ref l}, & BorrowedMatches{matches: r}) => l.len().cmp(& r.len()),
-      (& BorrowedMatches{matches: l}, & BorrowedMatches{matches: r}) => l.len().cmp(& r.len()),
+      (& BorrowedMatches{matches: ref l}, & BorrowedMatches{matches: ref r}) => l.len().cmp(& r.len())
     }
   }
 }
 
-impl<'a, 'w> PartialOrd for WordsMatch<'a, 'w> {
+impl<'w> PartialOrd for WordsMatch<'w> {
   fn partial_cmp(&self, other: &WordsMatch) -> Option<Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl<'a, 'w> PartialEq for WordsMatch<'a, 'w> {
+impl<'w> PartialEq for WordsMatch<'w> {
   fn eq(&self, other: & WordsMatch) -> bool {
     match self.cmp(other) {
       Ordering::Equal => true,
@@ -213,22 +189,95 @@ impl<'a, 'w> PartialEq for WordsMatch<'a, 'w> {
   }
 }
 
-impl<'a, 'w> Eq for WordsMatch<'a, 'w> {}
+impl<'w> Eq for WordsMatch<'w> {}
 
-#[derive(Debug)]
-struct WordRectangle<'a, 'w : 'a> {
-  array : Array2<Option<AsciiChar>>,
-  row_matches : Vec<WordsMatch<'a, 'w>>,
-  col_matches : Vec<WordsMatch<'a, 'w>>,
+#[derive(Debug,Clone)]
+enum Slot {
+  Row {y : usize},
+  Col {x : usize},
+}
+use Slot::*;
+
+fn constraint_hash<'a, I>(iter : I) -> u128 where I : Iterator<Item=& 'a Option<AsciiChar>> {
+  let mut hash = 0;
+  for option_c in iter {
+    hash *= 27;
+    match option_c.as_ref() {
+      None => {}
+      Some(& c) => hash += c as u128 - 'a' as u128 + 1
+    };
+  }
+  hash
 }
 
-impl <'a, 'w> WordRectangle<'a, 'w> {
-  fn shallow_copy<'b>(& 'b self) -> WordRectangle<'b, 'w>{
-    WordRectangle{
-      array : self.array.clone(),
-      row_matches : self.row_matches.iter().map(|m| m.shallow_copy()).collect(),
-      col_matches : self.col_matches.iter().map(|m| m.shallow_copy()).collect(),
+#[derive(Debug,Clone)]
+struct WordRectangle<'w> {
+  array : Array2<Option<AsciiChar>>,
+  row_matches : Vec<WordsMatch<'w>>,
+  col_matches : Vec<WordsMatch<'w>>,
+}
+
+impl <'w> WordRectangle<'w> {
+
+  fn lookup_slot_matches(& self, slot : & Slot) -> & WordsMatch {
+    match slot {
+      & Row{y} => & self.row_matches[y],
+      & Col{x} => & self.col_matches[x],
     }
+  }
+
+  fn lookup_slot_matches_mut(& mut self, slot : & Slot) -> & mut WordsMatch<'w> {
+    match slot {
+      & Row{y} => & mut self.row_matches[y],
+      & Col{x} => & mut self.col_matches[x],
+    }
+  }
+
+  fn width(& self) -> usize {
+    self.array.shape()[1]
+  }
+  fn height(& self) -> usize {
+    self.array.shape()[0]
+  }
+
+  fn apply_constraint<'a, 'b, 'c> (
+    & 'a self,
+    slot : & Slot,
+    word : & 'b [AsciiChar],
+    cache : & 'c  mut FnvHashMap<(usize, u128), Rc<[& 'w [AsciiChar]]>>) -> WordRectangle<'w>{
+    let mut new_rectangle : WordRectangle<'w> = (*self).clone();
+    * new_rectangle.lookup_slot_matches_mut(slot) = Filled;
+    {
+      let perp_len = match *slot {
+        Row{..} => new_rectangle.height(),
+        Col{..} =>  new_rectangle.width(),
+      };
+      let (perp_slots, perp_matches, pos) = match *slot {
+        Row{y} => (new_rectangle.array.gencolumns_mut(), & mut new_rectangle.col_matches, y),
+        Col{x} => (new_rectangle.array.genrows_mut()   , & mut new_rectangle.row_matches, x),
+      };
+      Zip::from(word)
+        .and(perp_slots)
+        .and(perp_matches)
+        .apply(|& c, mut perp_slot, perp_match| {
+          perp_slot[pos] = Some(c);
+          let cache_entry = cache.entry((perp_len,constraint_hash(perp_slot.iter())));
+          let matches : Rc<[& 'w [AsciiChar]]> = cache_entry.or_insert_with(|| {
+            match perp_match {
+              & mut Filled => panic!("Applied constraint to filled col/row"),
+              & mut Unconstrained => panic!("Cache failed to contain {:?}", perp_slot),
+              & mut BorrowedMatches{ref matches} => matches
+                .iter()
+                .cloned()
+                .filter( |word| word[pos] == c)
+                .collect::<Vec<& 'w [AsciiChar]>>()
+                .into(),
+            }
+          }).clone();
+          *perp_match = BorrowedMatches{matches}
+        });
+    }
+    new_rectangle
   }
 }
 
@@ -239,10 +288,10 @@ fn show_word_rectangle(word_rectangle : & Array2<Option<AsciiChar>>) -> String {
   join(rows,"\n")
 }
 
-fn step_word_rectangle<'a, 'w>(
-  indices : & HashMap<usize, Vec<Vec<& 'w[AsciiChar]>>>,
-  words_by_length : & 'a HashMap<usize, Vec<& 'w[AsciiChar]>>,
-  word_rectangle : WordRectangle<'a, 'w>,
+fn step_word_rectangle<'w, 'a>(
+  words_by_length : & 'w HashMap<usize, Vec<& 'w[AsciiChar]>>,
+  cache : & 'a mut FnvHashMap<(usize, u128), Rc<[& 'w [AsciiChar]]>>,
+  word_rectangle : WordRectangle<'w>,
   show_pb : bool,
   ) -> Option<Array2<Option<AsciiChar>>>
   {
@@ -257,67 +306,34 @@ fn step_word_rectangle<'a, 'w>(
   let (best_col_ix, best_col_matches) =
     word_rectangle.col_matches.iter().enumerate()
       .min_by(|& (_, ref l_matches), & (_, ref r_matches)| l_matches.cmp(r_matches)).expect("Empty cols");
-  if (& best_row_matches, unfiltered_row_candidates.len()) <
+  let target_slot = if (& best_row_matches, unfiltered_row_candidates.len()) <
     (& best_col_matches, unfiltered_col_candidates.len()) {
-      let matches : & [& [AsciiChar]] = match *best_row_matches {
-        Filled => return Some(word_rectangle.array),
-        Unconstrained => unfiltered_row_candidates,
-        OwnedMatches{matches:ref m} => m,
-        BorrowedMatches{matches:m} => m,
-      };
-      let mut pb = if show_pb {
-        Some(ProgressBar::new(matches.len() as u64))
-      } else {
-        None
-      };
-      for & word in matches {
-        for p in & mut pb {p.inc();};
-        let mut new_rectangle = word_rectangle.shallow_copy();
-        new_rectangle.row_matches[best_row_ix] = Filled;
-        {
-          let target = new_rectangle.array.subview_mut(Axis(0),best_row_ix);
-          Zip::from(word)
-            .and(target)
-            .apply(|& word_c, target_slot| *target_slot = Some(word_c));
-          Zip::from(word)
-            .and(& mut new_rectangle.col_matches)
-            .apply(|&c, col| col.apply_constraint( &indices[&height], best_row_ix, c));
-        }
-        let child_result = step_word_rectangle(indices, words_by_length, new_rectangle, false);
-        if child_result.is_some() {
-          return child_result;
-        }
-      }
+    Row{y:best_row_ix}
   } else {
-      let matches : & [& [AsciiChar]] = match *best_col_matches {
-        Filled => return Some(word_rectangle.array),
-        Unconstrained => unfiltered_col_candidates,
-        OwnedMatches{matches:ref m} => m,
-        BorrowedMatches{matches:m} => m,
-      };
-      let mut pb = if show_pb {
-        Some(ProgressBar::new(matches.len() as u64))
-      } else {
-        None
-      };
-      for & word in matches {
-        for p in & mut pb {p.inc();};
-        let mut new_rectangle = word_rectangle.shallow_copy();
-        new_rectangle.col_matches[best_col_ix] = Filled;
-        {
-          let target = new_rectangle.array.subview_mut(Axis(1),best_col_ix);
-          Zip::from(word)
-            .and(target)
-            .apply(|& word_c, target_slot| *target_slot = Some(word_c));
-          Zip::from(word)
-            .and(& mut new_rectangle.row_matches)
-            .apply(|&c, row| row.apply_constraint( &indices[&width], best_col_ix, c));
-        }
-        let child_result = step_word_rectangle(indices, words_by_length, new_rectangle, false);
-        if child_result.is_some() {
-          return child_result;
-        }
+    Col{x:best_col_ix}
+  };
+  let matches : & [& [AsciiChar]] = match word_rectangle.lookup_slot_matches(& target_slot){
+    & Filled => return Some(word_rectangle.array.clone()),
+    & Unconstrained => match target_slot {
+      Row{y:_} => unfiltered_row_candidates,
+      Col{x:_} => unfiltered_col_candidates,
+    }
+    & BorrowedMatches{matches: ref m} => m.borrow(),
+  };
+  let mut pb = if show_pb {
+    Some(ProgressBar::new(matches.len() as u64))
+  } else {
+    None
+  };
+  for & word in matches {
+    for p in & mut pb {p.inc();};
+    {
+      let new_rectangle = word_rectangle.apply_constraint(& target_slot, word, cache);
+      let child_result = step_word_rectangle(words_by_length, cache, new_rectangle, false);
+      if child_result.is_some() {
+        return child_result;
       }
+    }
   }
   None
 }

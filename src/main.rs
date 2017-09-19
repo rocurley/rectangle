@@ -59,7 +59,7 @@ fn main() {
   let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
   let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
   let slab : Arena<Vec<& [AsciiChar]>> = Arena::new();
-  let mut cache : FnvHashMap<(usize, u128), & [& [AsciiChar]]> = FnvHashMap::default();
+  let mut caches : FnvHashMap<usize, FnvHashMap< u128, & [& [AsciiChar]]>> = FnvHashMap::default();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
@@ -85,12 +85,13 @@ fn main() {
   };
   words_pb.finish_print("Preprocessing complete");
   for (l, index) in indices {
+    let cache = caches.entry(l).or_insert(FnvHashMap::default());
     println!("{}: {}", l, words_by_length[&l].len());
     for (i, matches) in index.into_iter().enumerate() {
       let pos = (i / 26) as u32;
       let c_int = (i % 26) as u128;
       let cache_hash = u128::pow(27,l as u32 - 1 - pos)*(c_int + 1);
-      cache.insert((l,cache_hash), slab.alloc(matches).as_slice());
+      cache.insert(cache_hash, slab.alloc(matches).as_slice());
     }
   }
   let mut dims = Vec::new();
@@ -114,11 +115,9 @@ fn main() {
       col_matches : col_matches,
     };
     println!("{}x{}", w, h);
-    //let mut stack = vec![empty];
-    //let mut pb_tuple : Option<(ProgressBar<_>, u64)> = None;
     PROFILER.lock().unwrap().start(format!("profiling/{}x{}.profile", w,h)).unwrap();
     let start_time = Instant::now();
-    match step_word_rectangle(& words_by_length, & slab, & mut cache, start, true) {
+    match step_word_rectangle(& words_by_length, & slab, & mut caches, start, true) {
       None => println!("No rectangle found"),
       Some(rect) => println!("Found:\n{}", show_word_rectangle(& rect)),
     }
@@ -225,13 +224,14 @@ impl <'w> WordRectangle<'w> {
     slot : & Slot,
     word : & 'b [AsciiChar],
     slab : & 'w Arena<Vec<& 'w [AsciiChar]>>,
-    cache : & 'c  mut FnvHashMap<(usize, u128), & 'w [& 'w [AsciiChar]]>) -> WordRectangle<'w>{
+    caches : & 'c mut FnvHashMap<usize, FnvHashMap< u128, & 'w [& 'w [AsciiChar]]>>) -> WordRectangle<'w>{
     let mut new_rectangle : WordRectangle<'w> = (*self).clone();
     {
       let perp_len = match *slot {
         Row{..} => new_rectangle.height(),
         Col{..} =>  new_rectangle.width(),
       };
+      let cache = caches.get_mut(& perp_len).expect("Cache missing");
       let (perp_slots, perp_matches, pos) = match *slot {
         Row{y} => (new_rectangle.array.gencolumns_mut(), & mut new_rectangle.col_matches, y),
         Col{x} => (new_rectangle.array.genrows_mut()   , & mut new_rectangle.row_matches, x),
@@ -244,7 +244,7 @@ impl <'w> WordRectangle<'w> {
           if let & mut Filled = perp_match {
             return
           }
-          let cache_entry = cache.entry((perp_len,constraint_hash(perp_slot.iter())));
+          let cache_entry = cache.entry(constraint_hash(perp_slot.iter()));
           let matches : & 'w [& 'w [AsciiChar]] = cache_entry.or_insert_with(|| {
             match perp_match {
               & mut Filled => panic!("We should have already returned"),
@@ -275,7 +275,7 @@ fn show_word_rectangle(word_rectangle : & Array2<Option<AsciiChar>>) -> String {
 fn step_word_rectangle<'w, 'a>(
   words_by_length : & 'w HashMap<usize, Vec<& 'w[AsciiChar]>>,
   slab : & 'w Arena<Vec<& 'w [AsciiChar]>>,
-  cache : & 'a  mut FnvHashMap<(usize, u128), & 'w [& 'w [AsciiChar]]>,
+  caches : & 'a mut FnvHashMap<usize, FnvHashMap< u128, & 'w [& 'w [AsciiChar]]>>,
   word_rectangle : WordRectangle<'w>,
   show_pb : bool,
   ) -> Option<Array2<Option<AsciiChar>>>
@@ -313,8 +313,8 @@ fn step_word_rectangle<'w, 'a>(
   for & word in matches {
     for p in & mut pb {p.inc();};
     {
-      let new_rectangle = word_rectangle.apply_constraint(& target_slot, word, slab, cache);
-      let child_result = step_word_rectangle(words_by_length, slab, cache, new_rectangle, false);
+      let new_rectangle = word_rectangle.apply_constraint(& target_slot, word, slab, caches);
+      let child_result = step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
       if child_result.is_some() {
         return child_result;
       }

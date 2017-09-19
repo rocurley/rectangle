@@ -83,12 +83,13 @@ fn main() {
     words_pb.inc();
   };
   words_pb.finish_print("Preprocessing complete");
-  for (&k, index) in indices.iter() {
-    println!("{}: {}", k, words_by_length[&k].len());
-    for char_index in index.iter(){
-      for word in char_index.iter() {
-        assert!(word.len() == k, "{:?} found in index for {}", word, k);
-      }
+  for (l, index) in indices {
+    println!("{}: {}", l, words_by_length[&l].len());
+    for (i, matches) in index.into_iter().enumerate() {
+      let pos = (i / 26) as u32;
+      let c_int = (i % 26) as u128;
+      let cache_hash = u128::pow(27,l as u32 - 1 - pos)*(c_int + 1);
+      cache.insert((l,cache_hash), matches.into());
     }
   }
   let mut dims = Vec::new();
@@ -246,7 +247,6 @@ impl <'w> WordRectangle<'w> {
     word : & 'b [AsciiChar],
     cache : & 'c  mut FnvHashMap<(usize, u128), Rc<[& 'w [AsciiChar]]>>) -> WordRectangle<'w>{
     let mut new_rectangle : WordRectangle<'w> = (*self).clone();
-    * new_rectangle.lookup_slot_matches_mut(slot) = Filled;
     {
       let perp_len = match *slot {
         Row{..} => new_rectangle.height(),
@@ -261,10 +261,13 @@ impl <'w> WordRectangle<'w> {
         .and(perp_matches)
         .apply(|& c, mut perp_slot, perp_match| {
           perp_slot[pos] = Some(c);
+          if let & mut Filled = perp_match {
+            return
+          }
           let cache_entry = cache.entry((perp_len,constraint_hash(perp_slot.iter())));
           let matches : Rc<[& 'w [AsciiChar]]> = cache_entry.or_insert_with(|| {
             match perp_match {
-              & mut Filled => panic!("Applied constraint to filled col/row"),
+              & mut Filled => panic!("We should have already returned"),
               & mut Unconstrained => panic!("Cache failed to contain {:?}", perp_slot),
               & mut BorrowedMatches{ref matches} => matches
                 .iter()
@@ -277,6 +280,7 @@ impl <'w> WordRectangle<'w> {
           *perp_match = BorrowedMatches{matches}
         });
     }
+    * new_rectangle.lookup_slot_matches_mut(slot) = Filled;
     new_rectangle
   }
 }

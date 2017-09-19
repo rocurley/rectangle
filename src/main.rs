@@ -175,7 +175,7 @@ use Slot::*;
 fn constraint_hash<'a, I>(iter : I) -> u128 where I : Iterator<Item=& 'a Option<AsciiChar>> {
   let mut hash = 0;
   for option_c in iter {
-    hash *= 27;
+    hash = hash << 5;
     match option_c.as_ref() {
       None => {}
       Some(& c) => hash += c as u128 - 'a' as u128 + 1
@@ -243,7 +243,7 @@ impl <'w> WordRectangle<'w> {
           let matches : & 'w [& 'w [AsciiChar]] = cache_entry.or_insert_with(|| {
             match perp_match {
               & mut Filled => panic!("We should have already returned"),
-              & mut Unconstrained => panic!("Cache failed to contain {:?}", perp_slot),
+              & mut Unconstrained => slab.alloc(vec![]).as_slice(),
               & mut BorrowedMatches{ref matches} => slab.alloc(matches
                 .iter()
                 .cloned()

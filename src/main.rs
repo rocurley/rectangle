@@ -8,7 +8,7 @@ use std::fs::File;
 use std::ascii::AsciiExt;
 
 extern crate ascii;
-use ascii::{AsciiString, AsciiChar, ToAsciiChar};
+use ascii::{AsciiString, AsciiChar};
 
 use std::collections::HashMap;
 
@@ -57,7 +57,7 @@ fn main() {
   let file = BufReader::new(&f);
   let words : Vec<AsciiString>;
   let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
-  let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
+  let mut indices : HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<& [AsciiChar]>>> = HashMap::new();
   let slab : Arena<Vec<& [AsciiChar]>> = Arena::new();
   let mut caches : FnvHashMap<usize, FnvHashMap< u128, & [& [AsciiChar]]>> = FnvHashMap::default();
   words = file.lines()
@@ -76,9 +76,9 @@ fn main() {
     let same_length = words_by_length.entry(l).or_insert(Vec::new());
     same_length.push(word.as_slice());
 
-    let index = indices.entry(l).or_insert(vec![Vec::new(); 26*l]);
+    let index = indices.entry(l).or_insert(FnvHashMap::default());
     for (pos, &c) in word.chars().enumerate() {
-      index[ix(pos, c)].push(word.as_slice());
+      index.entry((pos, c)).or_insert(Vec::new()).push(word.as_slice());
     }
 
     words_pb.inc();
@@ -87,10 +87,7 @@ fn main() {
   for (l, index) in indices {
     let cache = caches.entry(l).or_insert(FnvHashMap::default());
     println!("{}: {}", l, words_by_length[&l].len());
-    for (i, matches) in index.into_iter().enumerate() {
-      let pos = (i / 26);
-      let c_int = (i % 26) as u8;
-      let c = (c_int + 'a' as u8).to_ascii_char().expect("c_int not an ascii char");
+    for ((pos, c), matches) in index.into_iter() {
       let mut key = vec![None; l];
       key[pos] = Some(c);
       cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
@@ -127,10 +124,6 @@ fn main() {
     println!("{:?}", elapsed);
     PROFILER.lock().unwrap().stop().unwrap();
   };
-}
-
-fn ix(pos : usize, c : AsciiChar) -> usize {
-  return pos*26+(c as usize - 'a' as usize)
 }
 
 #[derive(Debug, Clone)]

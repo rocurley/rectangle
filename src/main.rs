@@ -8,7 +8,7 @@ use std::fs::File;
 use std::ascii::AsciiExt;
 
 extern crate ascii;
-use ascii::{AsciiString, AsciiChar};
+use ascii::{AsciiString, AsciiChar, ToAsciiChar};
 
 use std::collections::HashMap;
 
@@ -88,10 +88,12 @@ fn main() {
     let cache = caches.entry(l).or_insert(FnvHashMap::default());
     println!("{}: {}", l, words_by_length[&l].len());
     for (i, matches) in index.into_iter().enumerate() {
-      let pos = (i / 26) as u32;
-      let c_int = (i % 26) as u128;
-      let cache_hash = u128::pow(27,l as u32 - 1 - pos)*(c_int + 1);
-      cache.insert(cache_hash, slab.alloc(matches).as_slice());
+      let pos = (i / 26);
+      let c_int = (i % 26) as u8;
+      let c = (c_int + 'a' as u8).to_ascii_char().expect("c_int not an ascii char");
+      let mut key = vec![None; l];
+      key[pos] = Some(c);
+      cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
     }
   }
   let mut dims = Vec::new();

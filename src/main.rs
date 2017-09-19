@@ -58,7 +58,7 @@ fn main() {
   let words : Vec<AsciiString>;
   let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
   let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
-  let mut slab : Arena<Vec<& [AsciiChar]>> = Arena::new();
+  let slab : Arena<Vec<& [AsciiChar]>> = Arena::new();
   let mut cache : FnvHashMap<(usize, u128), & [& [AsciiChar]]> = FnvHashMap::default();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
@@ -130,28 +130,6 @@ fn main() {
 
 fn ix(pos : usize, c : AsciiChar) -> usize {
   return pos*26+(c as usize - 'a' as usize)
-}
-
-fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
-  let len = v.len();
-  let mut kept = 0;
-  let mut i = len-1;
-  {
-    let s = v.as_mut_slice();
-    if len == 0 {
-      return;
-    }
-
-    while i >= kept && i < len {
-      if f(&s[i]) {
-        s.swap(i, kept);
-        kept += 1;
-      } else {
-        i -= 1;
-      };
-    }
-  }
-  v.truncate(kept);
 }
 
 #[derive(Debug, Clone)]

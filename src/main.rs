@@ -16,9 +16,6 @@ use std::cmp::Ordering;
 
 use std::time::Instant;
 
-use std::rc::Rc;
-use std::borrow::Borrow;
-
 extern crate itertools;
 use itertools::join;
 
@@ -33,6 +30,9 @@ use cpuprofiler::PROFILER;
 
 extern crate fnv;
 use fnv::FnvHashMap;
+
+extern crate typed_arena;
+use typed_arena::Arena;
 
 #[macro_use]
 extern crate clap;
@@ -58,7 +58,8 @@ fn main() {
   let words : Vec<AsciiString>;
   let mut words_by_length : HashMap<usize, Vec<& [AsciiChar]>> = HashMap::new();
   let mut indices : HashMap<usize, Vec<Vec<& [AsciiChar]>>> = HashMap::new();
-  let mut cache : FnvHashMap<(usize, u128) , Rc<[& [AsciiChar]]>> = FnvHashMap::default();
+  let mut slab : Arena<Vec<& [AsciiChar]>> = Arena::new();
+  let mut cache : FnvHashMap<(usize, u128), & [& [AsciiChar]]> = FnvHashMap::default();
   words = file.lines()
     .map(|line| line.expect("Not a line or something"))
     .filter(|word|
@@ -89,7 +90,7 @@ fn main() {
       let pos = (i / 26) as u32;
       let c_int = (i % 26) as u128;
       let cache_hash = u128::pow(27,l as u32 - 1 - pos)*(c_int + 1);
-      cache.insert((l,cache_hash), matches.into());
+      cache.insert((l,cache_hash), slab.alloc(matches).as_slice());
     }
   }
   let mut dims = Vec::new();
@@ -117,7 +118,7 @@ fn main() {
     //let mut pb_tuple : Option<(ProgressBar<_>, u64)> = None;
     PROFILER.lock().unwrap().start(format!("profiling/{}x{}.profile", w,h)).unwrap();
     let start_time = Instant::now();
-    match step_word_rectangle(& words_by_length, & mut cache, start, true) {
+    match step_word_rectangle(& words_by_length, & slab, & mut cache, start, true) {
       None => println!("No rectangle found"),
       Some(rect) => println!("Found:\n{}", show_word_rectangle(& rect)),
     }
@@ -157,7 +158,7 @@ fn unstable_retain<F,A>(v : &mut Vec<A>, mut f: F) where F: FnMut(&A) -> bool {
 enum WordsMatch <'w>{
   Unconstrained,
   Filled,
-  BorrowedMatches { matches: Rc<[& 'w[AsciiChar]]>},
+  BorrowedMatches { matches: & 'w [& 'w[AsciiChar]]},
 }
 use WordsMatch::*;
 
@@ -245,7 +246,8 @@ impl <'w> WordRectangle<'w> {
     & 'a self,
     slot : & Slot,
     word : & 'b [AsciiChar],
-    cache : & 'c  mut FnvHashMap<(usize, u128), Rc<[& 'w [AsciiChar]]>>) -> WordRectangle<'w>{
+    slab : & 'w Arena<Vec<& 'w [AsciiChar]>>,
+    cache : & 'c  mut FnvHashMap<(usize, u128), & 'w [& 'w [AsciiChar]]>) -> WordRectangle<'w>{
     let mut new_rectangle : WordRectangle<'w> = (*self).clone();
     {
       let perp_len = match *slot {
@@ -265,16 +267,16 @@ impl <'w> WordRectangle<'w> {
             return
           }
           let cache_entry = cache.entry((perp_len,constraint_hash(perp_slot.iter())));
-          let matches : Rc<[& 'w [AsciiChar]]> = cache_entry.or_insert_with(|| {
+          let matches : & 'w [& 'w [AsciiChar]] = cache_entry.or_insert_with(|| {
             match perp_match {
               & mut Filled => panic!("We should have already returned"),
               & mut Unconstrained => panic!("Cache failed to contain {:?}", perp_slot),
-              & mut BorrowedMatches{ref matches} => matches
+              & mut BorrowedMatches{ref matches} => slab.alloc(matches
                 .iter()
                 .cloned()
                 .filter( |word| word[pos] == c)
                 .collect::<Vec<& 'w [AsciiChar]>>()
-                .into(),
+                ).as_slice(),
             }
           }).clone();
           *perp_match = BorrowedMatches{matches}
@@ -294,7 +296,8 @@ fn show_word_rectangle(word_rectangle : & Array2<Option<AsciiChar>>) -> String {
 
 fn step_word_rectangle<'w, 'a>(
   words_by_length : & 'w HashMap<usize, Vec<& 'w[AsciiChar]>>,
-  cache : & 'a mut FnvHashMap<(usize, u128), Rc<[& 'w [AsciiChar]]>>,
+  slab : & 'w Arena<Vec<& 'w [AsciiChar]>>,
+  cache : & 'a  mut FnvHashMap<(usize, u128), & 'w [& 'w [AsciiChar]]>,
   word_rectangle : WordRectangle<'w>,
   show_pb : bool,
   ) -> Option<Array2<Option<AsciiChar>>>
@@ -322,7 +325,7 @@ fn step_word_rectangle<'w, 'a>(
       Row{y:_} => unfiltered_row_candidates,
       Col{x:_} => unfiltered_col_candidates,
     }
-    & BorrowedMatches{matches: ref m} => m.borrow(),
+    & BorrowedMatches{matches: m} => m,
   };
   let mut pb = if show_pb {
     Some(ProgressBar::new(matches.len() as u64))
@@ -332,8 +335,8 @@ fn step_word_rectangle<'w, 'a>(
   for & word in matches {
     for p in & mut pb {p.inc();};
     {
-      let new_rectangle = word_rectangle.apply_constraint(& target_slot, word, cache);
-      let child_result = step_word_rectangle(words_by_length, cache, new_rectangle, false);
+      let new_rectangle = word_rectangle.apply_constraint(& target_slot, word, slab, cache);
+      let child_result = step_word_rectangle(words_by_length, slab, cache, new_rectangle, false);
       if child_result.is_some() {
         return child_result;
       }

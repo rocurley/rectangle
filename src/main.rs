@@ -32,6 +32,8 @@ use typed_arena::Arena;
 #[macro_use]
 extern crate clap;
 
+const EMPTY_ARRAY: [&[AsciiChar]; 0] = [];
+
 fn main() {
     let config = clap_app!(rectangle =>
       (@arg WORDS: +required "File to pull words from")
@@ -270,7 +272,9 @@ impl<'w> WordRectangle<'w> {
                     let matches: &'w [&'w [AsciiChar]] = cache_entry
                         .or_insert_with(|| match perp_match {
                             &mut Filled => panic!("We should have already returned"),
-                            &mut Unconstrained => slab.alloc(vec![]).as_slice(),
+                            // All single-character constraints are pre-populated into the cache,
+                            // so a cache miss here means there's nothing to find.
+                            &mut Unconstrained => &EMPTY_ARRAY,
                             &mut BorrowedMatches { ref matches } => slab
                                 .alloc(
                                     matches

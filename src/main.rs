@@ -211,6 +211,9 @@ impl<'w> BorrowedCrushedWords<'w> {
     fn len(self) -> usize {
         self.chars.len() / self.length
     }
+    fn raw_len(self) -> usize {
+        self.chars.len()
+    }
     fn empty() -> Self {
         BorrowedCrushedWords {
             length: 1,
@@ -237,7 +240,7 @@ impl<'w> Ord for WordsMatch<'w> {
             (&Unconstrained, _) => Ordering::Greater,
             (_, &Unconstrained) => Ordering::Less,
             (&BorrowedMatches { matches: ref l }, &BorrowedMatches { matches: ref r }) => {
-                l.len().cmp(&r.len())
+                l.raw_len().cmp(&r.raw_len())
             }
         }
     }

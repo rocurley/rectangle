@@ -57,52 +57,10 @@ fn main() {
         (x, None) => x,
         (None, x) => x,
     };
-    let f = File::open(words_path).expect("Could not open file");
-    let file = BufReader::new(&f);
-    let words: Vec<AsciiString>;
-    let mut words_by_length: HashMap<usize, Vec<&[AsciiChar]>> = HashMap::new();
-    let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
-        HashMap::new();
     let slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
-    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
-    words = file
-        .lines()
-        .map(|line| line.expect("Not a line or something"))
-        .filter(|word| {
-            word.chars().all(|c| c.is_ascii_lowercase())
-                && word.len() >= min_len
-                && max_len.map_or(true, |max| word.len() < max)
-        })
-        .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
-        .collect();
-    let mut words_pb = ProgressBar::new(words.len() as u64);
-    println!("Preprocessing words");
-    for word in words.iter() {
-        let l = word.len();
-
-        let same_length = words_by_length.entry(l).or_insert(Vec::new());
-        same_length.push(word.as_slice());
-
-        let index = indices.entry(l).or_insert(FnvHashMap::default());
-        for (pos, &c) in word.chars().enumerate() {
-            index
-                .entry((pos, c))
-                .or_insert(Vec::new())
-                .push(word.as_slice());
-        }
-
-        words_pb.inc();
-    }
-    words_pb.finish_print("Preprocessing complete");
-    for (l, index) in indices {
-        let cache = caches.entry(l).or_insert(FnvHashMap::default());
-        println!("{}: {}", l, words_by_length[&l].len());
-        for ((pos, c), matches) in index.into_iter() {
-            let mut key = vec![None; l];
-            key[pos] = Some(c);
-            cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
-        }
-    }
+    let mut words = Vec::new();
+    let (words_by_length, mut caches) =
+        preprocess_words(&mut words, &slab, words_path, min_len, max_len);
     let mut dims = Vec::new();
     for x in words_by_length.keys() {
         for y in words_by_length.keys() {
@@ -362,4 +320,60 @@ fn step_word_rectangle<'w, 'a>(
         }
     }
     None
+}
+
+fn preprocess_words<'w>(
+    words: &'w mut Vec<AsciiString>,
+    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+    words_path: &str,
+    min_len: usize,
+    max_len: Option<usize>,
+) -> (
+    HashMap<usize, Vec<&'w [AsciiChar]>>,
+    FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
+) {
+    let f = File::open(words_path).expect("Could not open file");
+    let file = BufReader::new(&f);
+    let mut words_by_length: HashMap<usize, Vec<&[AsciiChar]>> = HashMap::new();
+    let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
+        HashMap::new();
+    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
+    *words = file
+        .lines()
+        .map(|line| line.expect("Not a line or something"))
+        .filter(|word| {
+            word.chars().all(|c| c.is_ascii_lowercase())
+                && word.len() >= min_len
+                && max_len.map_or(true, |max| word.len() < max)
+        })
+        .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
+        .collect();
+    let mut words_pb = ProgressBar::new(words.len() as u64);
+    println!("Preprocessing words");
+    for word in words.iter() {
+        let l = word.len();
+
+        let same_length = words_by_length.entry(l).or_insert(Vec::new());
+        same_length.push(word.as_slice());
+
+        let index = indices.entry(l).or_insert(FnvHashMap::default());
+        for (pos, &c) in word.chars().enumerate() {
+            index
+                .entry((pos, c))
+                .or_insert(Vec::new())
+                .push(word.as_slice());
+        }
+
+        words_pb.inc();
+    }
+    words_pb.finish_print("Preprocessing complete");
+    for (l, index) in indices {
+        let cache = caches.entry(l).or_insert(FnvHashMap::default());
+        for ((pos, c), matches) in index.into_iter() {
+            let mut key = vec![None; l];
+            key[pos] = Some(c);
+            cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
+        }
+    }
+    (words_by_length, caches)
 }

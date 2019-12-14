@@ -5,9 +5,9 @@ use std::io::BufReader;
 extern crate ascii;
 use ascii::{AsciiChar, AsciiString};
 
-use std::collections::HashMap;
-
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::iter::FromIterator;
 
 extern crate itertools;
 use itertools::join;
@@ -24,7 +24,8 @@ use fnv::FnvHashMap;
 extern crate typed_arena;
 use typed_arena::Arena;
 
-const EMPTY_ARRAY: [&[AsciiChar]; 0] = [];
+const EMPTY_ARRAY: [AsciiChar; 0] = [];
+const EMPTY_NESTED_ARRAY: [&[AsciiChar]; 0] = [];
 
 #[derive(Debug, Clone)]
 pub enum WordsMatch<'w> {
@@ -66,6 +67,81 @@ impl<'w> PartialEq for WordsMatch<'w> {
 }
 
 impl<'w> Eq for WordsMatch<'w> {}
+
+pub struct CrushedWords {
+    length: usize,
+    chars: Vec<AsciiChar>,
+}
+
+impl<'a> FromIterator<&'a [AsciiChar]> for CrushedWords {
+    fn from_iter<T>(x: T) -> Self
+    where
+        T: IntoIterator<Item = &'a [AsciiChar]>,
+    {
+        let mut words = CrushedWords::empty();
+        for word in x {
+            words.push(word);
+        }
+        words
+    }
+}
+
+impl<'a> CrushedWords {
+    pub fn borrow(&'a self) -> BorrowedCrushedWords {
+        BorrowedCrushedWords {
+            length: self.length,
+            chars: &self.chars,
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.chars.len() / self.length
+    }
+    pub fn empty() -> Self {
+        CrushedWords {
+            length: 1,
+            chars: Vec::new(),
+        }
+    }
+    pub fn push(&'a mut self, v: &[AsciiChar]) -> &'a [AsciiChar] {
+        if self.chars.len() == 0 {
+            self.length = v.len();
+        } else {
+            assert_eq!(self.length, v.len());
+        }
+        let return_slice_start = self.chars.len();
+        self.chars.extend_from_slice(&v);
+        &self.chars[return_slice_start..]
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct BorrowedCrushedWords<'w> {
+    length: usize,
+    chars: &'w [AsciiChar],
+}
+
+impl<'w> IntoIterator for BorrowedCrushedWords<'w> {
+    type Item = &'w [AsciiChar];
+    type IntoIter = std::slice::ChunksExact<'w, AsciiChar>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.chars.chunks_exact(self.length)
+    }
+}
+
+impl<'w> BorrowedCrushedWords<'w> {
+    fn len(self) -> usize {
+        self.chars.len() / self.length
+    }
+    fn raw_len(self) -> usize {
+        self.chars.len()
+    }
+    fn empty() -> Self {
+        BorrowedCrushedWords {
+            length: 1,
+            chars: &EMPTY_ARRAY,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Slot {
@@ -156,7 +232,7 @@ impl<'w> WordRectangle<'w> {
                             &mut Filled => panic!("We should have already returned"),
                             // All single-character constraints are pre-populated into the cache,
                             // so a cache miss here means there's nothing to find.
-                            &mut Unconstrained => &EMPTY_ARRAY,
+                            &mut Unconstrained => &EMPTY_NESTED_ARRAY,
                             &mut BorrowedMatches { ref matches } => slab
                                 .alloc(
                                     matches
@@ -187,7 +263,7 @@ pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String
 }
 
 pub fn step_word_rectangle<'w, 'a>(
-    words_by_length: &'w HashMap<usize, Vec<&'w [AsciiChar]>>,
+    words_by_length: &'w HashMap<usize, BorrowedCrushedWords<'w>>,
     slab: &'w Arena<Vec<&'w [AsciiChar]>>,
     caches: &'a mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
     word_rectangle: WordRectangle<'w>,
@@ -195,8 +271,8 @@ pub fn step_word_rectangle<'w, 'a>(
 ) -> Option<Array2<Option<AsciiChar>>> {
     let width = word_rectangle.array.shape()[1];
     let height = word_rectangle.array.shape()[0];
-    let unfiltered_row_candidates = &words_by_length[&width];
-    let unfiltered_col_candidates = &words_by_length[&height];
+    let unfiltered_row_candidates = words_by_length[&width];
+    let unfiltered_col_candidates = words_by_length[&height];
 
     let (best_row_ix, best_row_matches) = word_rectangle
         .row_matches
@@ -217,52 +293,66 @@ pub fn step_word_rectangle<'w, 'a>(
     } else {
         Col { x: best_col_ix }
     };
-    let matches: &[&[AsciiChar]] = match word_rectangle.lookup_slot_matches(&target_slot) {
+    match word_rectangle.lookup_slot_matches(&target_slot) {
         &Filled => return Some(word_rectangle.array.clone()),
-        &Unconstrained => match target_slot {
-            Row { y: _ } => unfiltered_row_candidates,
-            Col { x: _ } => unfiltered_col_candidates,
-        },
-        &BorrowedMatches { matches: m } => m,
-    };
-    let mut pb = if show_pb {
-        Some(ProgressBar::new(matches.len() as u64))
-    } else {
-        None
-    };
-    for &word in matches {
-        for p in &mut pb {
-            p.inc();
-        }
-        {
-            let new_rectangle = word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-            let child_result =
-                step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
-            if child_result.is_some() {
-                return child_result;
+        &Unconstrained => {
+            let matches = match target_slot {
+                Row { y: _ } => Box::new(unfiltered_row_candidates.into_iter()),
+                Col { x: _ } => Box::new(unfiltered_col_candidates.into_iter()),
+            };
+            let mut pb = if show_pb {
+                Some(ProgressBar::new(matches.len() as u64))
+            } else {
+                None
+            };
+            for word in matches {
+                for p in &mut pb {
+                    p.inc();
+                }
+                {
+                    let new_rectangle =
+                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
+                    let child_result =
+                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    if child_result.is_some() {
+                        return child_result;
+                    }
+                }
             }
         }
-    }
+        &BorrowedMatches { matches } => {
+            let mut pb = if show_pb {
+                Some(ProgressBar::new(matches.len() as u64))
+            } else {
+                None
+            };
+            for word in matches {
+                for p in &mut pb {
+                    p.inc();
+                }
+                {
+                    let new_rectangle =
+                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
+                    let child_result =
+                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    if child_result.is_some() {
+                        return child_result;
+                    }
+                }
+            }
+        }
+    };
     None
 }
 
-pub fn preprocess_words<'w>(
-    words: &'w mut Vec<AsciiString>,
-    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+pub fn load_words(
     words_path: &str,
     min_len: usize,
     max_len: Option<usize>,
-) -> (
-    HashMap<usize, Vec<&'w [AsciiChar]>>,
-    FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
-) {
+) -> HashMap<usize, CrushedWords> {
     let f = File::open(words_path).expect("Could not open file");
     let file = BufReader::new(&f);
-    let mut words_by_length: HashMap<usize, Vec<&[AsciiChar]>> = HashMap::new();
-    let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
-        HashMap::new();
-    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
-    *words = file
+    let words: Vec<AsciiString> = file
         .lines()
         .map(|line| line.expect("Not a line or something"))
         .filter(|word| {
@@ -272,25 +362,30 @@ pub fn preprocess_words<'w>(
         })
         .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
         .collect();
-    let mut words_pb = ProgressBar::new(words.len() as u64);
-    println!("Preprocessing words");
+    let mut words_by_length = HashMap::new();
     for word in words.iter() {
         let l = word.len();
-
-        let same_length = words_by_length.entry(l).or_insert(Vec::new());
+        let same_length = words_by_length.entry(l).or_insert(CrushedWords::empty());
         same_length.push(word.as_slice());
-
-        let index = indices.entry(l).or_insert(FnvHashMap::default());
-        for (pos, &c) in word.chars().enumerate() {
-            index
-                .entry((pos, c))
-                .or_insert(Vec::new())
-                .push(word.as_slice());
-        }
-
-        words_pb.inc();
     }
-    words_pb.finish_print("Preprocessing complete");
+    words_by_length
+}
+
+pub fn prepopulate_cache<'w>(
+    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+    words_by_length: &'w HashMap<usize, CrushedWords>,
+) -> FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>> {
+    let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
+        HashMap::new();
+    for (l, words) in words_by_length {
+        let index = indices.entry(*l).or_insert(FnvHashMap::default());
+        for word in words.borrow() {
+            for (pos, &c) in word.into_iter().enumerate() {
+                index.entry((pos, c)).or_insert(Vec::new()).push(word);
+            }
+        }
+    }
+    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
     for (l, index) in indices {
         let cache = caches.entry(l).or_insert(FnvHashMap::default());
         for ((pos, c), matches) in index.into_iter() {
@@ -299,5 +394,5 @@ pub fn preprocess_words<'w>(
             cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
         }
     }
-    (words_by_length, caches)
+    caches
 }

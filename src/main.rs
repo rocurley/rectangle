@@ -17,7 +17,8 @@ extern crate clap;
 
 extern crate rectangle;
 use rectangle::{
-    preprocess_words, show_word_rectangle, step_word_rectangle, WordRectangle, WordsMatch::*,
+    load_words, prepopulate_cache, show_word_rectangle, step_word_rectangle, WordRectangle,
+    WordsMatch::*,
 };
 
 fn main() {
@@ -44,9 +45,8 @@ fn main() {
         (None, x) => x,
     };
     let slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
-    let mut words = Vec::new();
-    let (words_by_length, mut caches) =
-        preprocess_words(&mut words, &slab, words_path, min_len, max_len);
+    let words_by_length = load_words(words_path, min_len, max_len);
+    let mut caches = prepopulate_cache(&slab, &words_by_length);
     let mut dims = Vec::new();
     for x in words_by_length.keys() {
         for y in words_by_length.keys() {
@@ -55,6 +55,10 @@ fn main() {
             }
         }
     }
+    let words_by_length_borrowed = words_by_length
+        .iter()
+        .map(|(&l, words)| (l, words.borrow()))
+        .collect();
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
     for &(&w, &h) in dims.iter() {
         let empty = Array::from_elem((h, w), None);
@@ -78,7 +82,7 @@ fn main() {
             .start(format!("profiling/{}x{}.profile", w, h))
             .unwrap();
         let start_time = Instant::now();
-        match step_word_rectangle(&words_by_length, &slab, &mut caches, start, true) {
+        match step_word_rectangle(&words_by_length_borrowed, &slab, &mut caches, start, true) {
             None => println!("No rectangle found"),
             Some(rect) => println!("Found:\n{}", show_word_rectangle(&rect)),
         }

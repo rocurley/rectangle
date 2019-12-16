@@ -64,11 +64,11 @@ fn main() {
         let empty = Array::from_elem((h, w), None);
         let mut row_matches = Vec::new();
         for _ in 0..h {
-            row_matches.push(Unconstrained)
+            row_matches.push((Unconstrained, 0))
         }
         let mut col_matches = Vec::new();
         for _ in 0..w {
-            col_matches.push(Unconstrained)
+            col_matches.push((Unconstrained, 0))
         }
         let start = WordRectangle {
             array: empty,

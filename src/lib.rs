@@ -168,19 +168,19 @@ where
 #[derive(Debug, Clone)]
 pub struct WordRectangle<'w> {
     pub array: Array2<Option<AsciiChar>>,
-    pub row_matches: Vec<WordsMatch<'w>>,
-    pub col_matches: Vec<WordsMatch<'w>>,
+    pub row_matches: Vec<(WordsMatch<'w>, u128)>,
+    pub col_matches: Vec<(WordsMatch<'w>, u128)>,
 }
 
 impl<'w> WordRectangle<'w> {
-    fn lookup_slot_matches(&self, slot: &Slot) -> &WordsMatch {
+    fn lookup_slot_matches(&self, slot: &Slot) -> &(WordsMatch, u128) {
         match slot {
             &Row { y } => &self.row_matches[y],
             &Col { x } => &self.col_matches[x],
         }
     }
 
-    fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut WordsMatch<'w> {
+    fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut (WordsMatch<'w>, u128) {
         match slot {
             &Row { y } => &mut self.row_matches[y],
             &Col { x } => &mut self.col_matches[x],
@@ -221,12 +221,13 @@ impl<'w> WordRectangle<'w> {
                 ),
             };
             Zip::from(word).and(perp_slots).and(perp_matches).apply(
-                |&c, mut perp_slot, perp_match| {
+                |&c, mut perp_slot, (perp_match, prehash)| {
                     perp_slot[pos] = Some(c);
                     if let &mut Filled = perp_match {
                         return;
                     }
-                    let cache_entry = cache.entry(constraint_hash(perp_slot.iter()));
+                    *prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
+                    let cache_entry = cache.entry(*prehash);
                     let matches: &'w [&'w [AsciiChar]] = cache_entry
                         .or_insert_with(|| match perp_match {
                             &mut Filled => panic!("We should have already returned"),
@@ -248,7 +249,7 @@ impl<'w> WordRectangle<'w> {
                 },
             );
         }
-        *new_rectangle.lookup_slot_matches_mut(slot) = Filled;
+        *new_rectangle.lookup_slot_matches_mut(slot) = (Filled, 0);
         new_rectangle
     }
 }
@@ -293,9 +294,9 @@ pub fn step_word_rectangle<'w, 'a>(
     } else {
         Col { x: best_col_ix }
     };
-    match word_rectangle.lookup_slot_matches(&target_slot) {
-        &Filled => return Some(word_rectangle.array.clone()),
-        &Unconstrained => {
+    match word_rectangle.lookup_slot_matches(&target_slot).0 {
+        Filled => return Some(word_rectangle.array.clone()),
+        Unconstrained => {
             let matches = match target_slot {
                 Row { y: _ } => Box::new(unfiltered_row_candidates.into_iter()),
                 Col { x: _ } => Box::new(unfiltered_col_candidates.into_iter()),
@@ -320,7 +321,7 @@ pub fn step_word_rectangle<'w, 'a>(
                 }
             }
         }
-        &BorrowedMatches { matches } => {
+        BorrowedMatches { matches } => {
             let mut pb = if show_pb {
                 Some(ProgressBar::new(matches.len() as u64))
             } else {

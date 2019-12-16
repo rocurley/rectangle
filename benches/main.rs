@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate criterion;
+extern crate cpuprofiler;
 extern crate typed_arena;
+use cpuprofiler::PROFILER;
 use typed_arena::Arena;
 extern crate ascii;
 use ascii::AsciiChar;
@@ -35,11 +37,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let empty = Array::from_elem((DIM, DIM), None);
                 let mut row_matches = Vec::new();
                 for _ in 0..DIM {
-                    row_matches.push(WordsMatch::Unconstrained)
+                    row_matches.push((WordsMatch::Unconstrained, 0))
                 }
                 let mut col_matches = Vec::new();
                 for _ in 0..DIM {
-                    col_matches.push(WordsMatch::Unconstrained)
+                    col_matches.push((WordsMatch::Unconstrained, 0))
                 }
                 let start = WordRectangle {
                     array: empty,
@@ -56,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         },
     );
+    PROFILER.lock().unwrap().stop().unwrap();
 }
 
 criterion_group!(benches, criterion_benchmark);

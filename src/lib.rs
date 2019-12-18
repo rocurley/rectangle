@@ -1,3 +1,4 @@
+#![allow(clippy::implicit_hasher)]
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -96,6 +97,9 @@ impl<'a> CrushedWords {
     pub fn len(&self) -> usize {
         self.chars.len() / self.length
     }
+    pub fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
     pub fn empty() -> Self {
         CrushedWords {
             length: 1,
@@ -103,7 +107,7 @@ impl<'a> CrushedWords {
         }
     }
     pub fn push(&'a mut self, v: &[AsciiChar]) -> &'a [AsciiChar] {
-        if self.chars.len() == 0 {
+        if self.chars.is_empty() {
             self.length = v.len();
         } else {
             assert_eq!(self.length, v.len());
@@ -132,9 +136,7 @@ impl<'w> BorrowedCrushedWords<'w> {
     fn len(self) -> usize {
         self.chars.len() / self.length
     }
-    fn raw_len(self) -> usize {
-        self.chars.len()
-    }
+    #[allow(dead_code)]
     fn empty() -> Self {
         BorrowedCrushedWords {
             length: 1,
@@ -156,10 +158,10 @@ where
 {
     let mut hash = 0;
     for option_c in iter {
-        hash = hash << 5;
+        hash <<= 5;
         match option_c.as_ref() {
             None => {}
-            Some(&c) => hash += c as u128 - 'a' as u128 + 1,
+            Some(&letter) => hash += letter as u128 - 'a' as u128 + 1,
         };
     }
     hash
@@ -174,16 +176,16 @@ pub struct WordRectangle<'w> {
 
 impl<'w> WordRectangle<'w> {
     fn lookup_slot_matches(&self, slot: &Slot) -> &(WordsMatch, u128) {
-        match slot {
-            &Row { y } => &self.row_matches[y],
-            &Col { x } => &self.col_matches[x],
+        match *slot {
+            Row { y } => &self.row_matches[y],
+            Col { x } => &self.col_matches[x],
         }
     }
 
     fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut (WordsMatch<'w>, u128) {
-        match slot {
-            &Row { y } => &mut self.row_matches[y],
-            &Col { x } => &mut self.col_matches[x],
+        match *slot {
+            Row { y } => &mut self.row_matches[y],
+            Col { x } => &mut self.col_matches[x],
         }
     }
 
@@ -223,18 +225,18 @@ impl<'w> WordRectangle<'w> {
             Zip::from(word).and(perp_slots).and(perp_matches).apply(
                 |&c, mut perp_slot, (perp_match, prehash)| {
                     perp_slot[pos] = Some(c);
-                    if let &mut Filled = perp_match {
+                    if let Filled = *perp_match {
                         return;
                     }
                     *prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
                     let cache_entry = cache.entry(*prehash);
-                    let matches: &'w [&'w [AsciiChar]] = cache_entry
-                        .or_insert_with(|| match perp_match {
-                            &mut Filled => panic!("We should have already returned"),
+                    let matches: &'w [&'w [AsciiChar]] =
+                        *cache_entry.or_insert_with(|| match *perp_match {
+                            Filled => panic!("We should have already returned"),
                             // All single-character constraints are pre-populated into the cache,
                             // so a cache miss here means there's nothing to find.
-                            &mut Unconstrained => &EMPTY_NESTED_ARRAY,
-                            &mut BorrowedMatches { ref matches } => slab
+                            Unconstrained => &EMPTY_NESTED_ARRAY,
+                            BorrowedMatches { ref matches } => slab
                                 .alloc(
                                     matches
                                         .iter()
@@ -243,8 +245,7 @@ impl<'w> WordRectangle<'w> {
                                         .collect::<Vec<&'w [AsciiChar]>>(),
                                 )
                                 .as_slice(),
-                        })
-                        .clone();
+                        });
                     *perp_match = BorrowedMatches { matches }
                 },
             );
@@ -298,8 +299,8 @@ pub fn step_word_rectangle<'w, 'a>(
         Filled => return Some(word_rectangle.array.clone()),
         Unconstrained => {
             let matches = match target_slot {
-                Row { y: _ } => Box::new(unfiltered_row_candidates.into_iter()),
-                Col { x: _ } => Box::new(unfiltered_col_candidates.into_iter()),
+                Row { .. } => unfiltered_row_candidates.into_iter(),
+                Col { .. } => unfiltered_col_candidates.into_iter(),
             };
             let mut pb = if show_pb {
                 Some(ProgressBar::new(matches.len() as u64))
@@ -366,7 +367,7 @@ pub fn load_words(
     let mut words_by_length = HashMap::new();
     for word in words.iter() {
         let l = word.len();
-        let same_length = words_by_length.entry(l).or_insert(CrushedWords::empty());
+        let same_length = words_by_length.entry(l).or_insert_with(CrushedWords::empty);
         same_length.push(word.as_slice());
     }
     words_by_length
@@ -376,19 +377,20 @@ pub fn prepopulate_cache<'w>(
     slab: &'w Arena<Vec<&'w [AsciiChar]>>,
     words_by_length: &'w HashMap<usize, CrushedWords>,
 ) -> FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>> {
+    #[allow(clippy::type_complexity)]
     let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
         HashMap::new();
     for (l, words) in words_by_length {
-        let index = indices.entry(*l).or_insert(FnvHashMap::default());
+        let index = indices.entry(*l).or_insert_with(FnvHashMap::default);
         for word in words.borrow() {
-            for (pos, &c) in word.into_iter().enumerate() {
-                index.entry((pos, c)).or_insert(Vec::new()).push(word);
+            for (pos, &c) in word.iter().enumerate() {
+                index.entry((pos, c)).or_insert_with(Vec::new).push(word);
             }
         }
     }
     let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
     for (l, index) in indices {
-        let cache = caches.entry(l).or_insert(FnvHashMap::default());
+        let cache = caches.entry(l).or_insert_with(FnvHashMap::default);
         for ((pos, c), matches) in index.into_iter() {
             let mut key = vec![None; l];
             key[pos] = Some(c);

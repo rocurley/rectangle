@@ -72,8 +72,8 @@ fn main() {
         }
         let start = WordRectangle {
             array: empty,
-            row_matches: row_matches,
-            col_matches: col_matches,
+            row_matches,
+            col_matches,
         };
         println!("{}x{}", w, h);
         PROFILER

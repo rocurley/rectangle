@@ -83,8 +83,10 @@ fn main() {
             .unwrap();
         let start_time = Instant::now();
         match step_word_rectangle(&words_by_length_borrowed, &slab, &mut caches, start, true) {
-            None => println!("No rectangle found"),
-            Some(rect) => println!("Found:\n{}", show_word_rectangle(&rect)),
+            (None, calls) => println!("No rectangle found in {} calls", calls),
+            (Some(rect), calls) => {
+                println!("Found in {} calls:\n{}", calls, show_word_rectangle(&rect))
+            }
         }
         let elapsed = start_time.elapsed();
         println!("{:?}", elapsed);

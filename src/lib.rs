@@ -270,7 +270,7 @@ pub fn step_word_rectangle<'w, 'a>(
     caches: &'a mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
-) -> Option<Array2<Option<AsciiChar>>> {
+) -> (Option<Array2<Option<AsciiChar>>>, u64) {
     let width = word_rectangle.array.shape()[1];
     let height = word_rectangle.array.shape()[0];
     let unfiltered_row_candidates = words_by_length[&width];
@@ -295,8 +295,9 @@ pub fn step_word_rectangle<'w, 'a>(
     } else {
         Col { x: best_col_ix }
     };
+    let mut call_count = 1;
     match word_rectangle.lookup_slot_matches(&target_slot).0 {
-        Filled => return Some(word_rectangle.array.clone()),
+        Filled => return (Some(word_rectangle.array.clone()), call_count),
         Unconstrained => {
             let matches = match target_slot {
                 Row { .. } => unfiltered_row_candidates.into_iter(),
@@ -314,10 +315,11 @@ pub fn step_word_rectangle<'w, 'a>(
                 {
                     let new_rectangle =
                         word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result =
+                    let (child_result, child_call_count) =
                         step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    call_count += child_call_count;
                     if child_result.is_some() {
-                        return child_result;
+                        return (child_result, call_count);
                     }
                 }
             }
@@ -335,16 +337,17 @@ pub fn step_word_rectangle<'w, 'a>(
                 {
                     let new_rectangle =
                         word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result =
+                    let (child_result, child_call_count) =
                         step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    call_count += child_call_count;
                     if child_result.is_some() {
-                        return child_result;
+                        return (child_result, call_count);
                     }
                 }
             }
         }
     };
-    None
+    (None, call_count)
 }
 
 pub fn load_words(

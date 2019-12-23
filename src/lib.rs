@@ -44,6 +44,7 @@ pub enum WordsMatch<'w> {
         constraint: BorrowedSlotConstraint<'w>,
         prehash: u128,
     },
+    NoMatches,
 }
 
 impl<'w> WordsMatch<'w> {
@@ -58,9 +59,10 @@ impl<'w> WordsMatch<'w> {
     ) -> Self {
         match self {
             Filled(_) => panic!("cannot fix char in filled slot"),
+            NoMatches => panic!("cannot fix char if there are no matches"),
             BorrowedMatches {
                 constraint,
-                prehash,
+                mut prehash,
             } => {
                 prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (len - ix - 1));
                 let new_constraint = cache.entry(prehash).or_insert_with(|| {
@@ -87,14 +89,24 @@ impl<'w> WordsMatch<'w> {
                         possible_chars,
                     }
                 });
-                if new_constraint.matches.len() == 1 {
-                    Filled(new_constraint.matches[0])
-                } else {
-                    BorrowedMatches {
+                match new_constraint.matches.len() {
+                    0 => NoMatches,
+                    1 => Filled(new_constraint.matches[0]),
+                    _ => BorrowedMatches {
                         constraint: *new_constraint,
                         prehash,
-                    }
+                    },
                 }
+            }
+            Unconstrained => {
+                let prehash = (c as u128 - 'a' as u128 + 1) << (5 * (len - ix - 1));
+                // Cache has it if there's anything there, since we prepopulated it.
+                cache
+                    .get(&prehash)
+                    .map_or(NoMatches, |&constraint| BorrowedMatches {
+                        constraint,
+                        prehash,
+                    })
             }
         }
     }
@@ -235,12 +247,12 @@ impl<'w> WordRectangle<'w> {
         matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
         possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
         caches: &'c mut FnvHashMap<usize, Cache<'w>>,
-    ) -> WordRectangle<'w> {
+    ) -> Option<WordRectangle<'w>> {
         let mut new_rectangle: WordRectangle<'w> = (*self).clone();
         let width = new_rectangle.width();
         let height = new_rectangle.height();
         let row_cache = caches.get_mut(&width).expect("Cache missing");
-        let row_constraint = &mut self.row_matches[row_ix];
+        let row_constraint = &mut new_rectangle.row_matches[row_ix];
         *row_constraint = row_constraint.fix_char(
             col_ix,
             width,
@@ -250,7 +262,7 @@ impl<'w> WordRectangle<'w> {
             row_cache,
         );
         let col_cache = caches.get_mut(&height).expect("Cache missing");
-        let col_constraint = &mut self.col_matches[col_ix];
+        let col_constraint = &mut new_rectangle.col_matches[col_ix];
         *col_constraint = col_constraint.fix_char(
             row_ix,
             height,
@@ -263,10 +275,39 @@ impl<'w> WordRectangle<'w> {
             BorrowedMatches { constraint, .. } => {
                 Zip::from(constraint.possible_chars)
                     .and(new_rectangle.array.gencolumns_mut())
-                    .apply(|&possible_chars, col| {});
+                    .apply(|possible_chars, mut col| {
+                        col[row_ix] = col[row_ix].intersection(possible_chars).copied().collect();
+                    });
             }
+            Filled(word) => {
+                Zip::from(*word)
+                    .and(new_rectangle.array.gencolumns_mut())
+                    .apply(|&c, mut col| {
+                        col[row_ix] = [c].into_iter().copied().collect();
+                    });
+            }
+            Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
+            NoMatches => return None,
         }
-        new_rectangle
+        match col_constraint {
+            BorrowedMatches { constraint, .. } => {
+                Zip::from(constraint.possible_chars)
+                    .and(new_rectangle.array.genrows_mut())
+                    .apply(|possible_chars, mut row| {
+                        row[col_ix] = row[col_ix].intersection(possible_chars).copied().collect();
+                    });
+            }
+            Filled(word) => {
+                Zip::from(*word)
+                    .and(new_rectangle.array.genrows_mut())
+                    .apply(|&c, mut row| {
+                        row[col_ix] = [c].into_iter().copied().collect();
+                    });
+            }
+            Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
+            NoMatches => return None,
+        }
+        Some(new_rectangle)
     }
 }
 
@@ -281,87 +322,69 @@ pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String
 
 pub fn step_word_rectangle<'w, 'a>(
     words_by_length: &'w HashMap<usize, BorrowedCrushedWords<'w>>,
-    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-    caches: &'a mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
+    matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+    possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+    caches: &'a mut FnvHashMap<usize, Cache<'w>>,
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
 ) -> (Option<Array2<Option<AsciiChar>>>, u64) {
     let width = word_rectangle.array.shape()[1];
     let height = word_rectangle.array.shape()[0];
-    let unfiltered_row_candidates = words_by_length[&width];
-    let unfiltered_col_candidates = words_by_length[&height];
 
-    let (best_row_ix, best_row_matches) = word_rectangle
-        .row_matches
-        .iter()
-        .enumerate()
-        .min_by(|&(_, ref l_matches), &(_, ref r_matches)| l_matches.cmp(r_matches))
-        .expect("Empty rows");
-    let (best_col_ix, best_col_matches) = word_rectangle
-        .col_matches
-        .iter()
-        .enumerate()
-        .min_by(|&(_, ref l_matches), &(_, ref r_matches)| l_matches.cmp(r_matches))
-        .expect("Empty cols");
-    let target_slot = if (&best_row_matches, unfiltered_row_candidates.len())
-        < (&best_col_matches, unfiltered_col_candidates.len())
-    {
-        Row { y: best_row_ix }
+    let candidate = word_rectangle
+        .array
+        .indexed_iter()
+        .map(|(ix, options)| (ix, options.len()))
+        .filter(|(_, count)| *count != 1)
+        .min_by_key(|(_, count)| *count);
+    let target = match candidate {
+        None => {
+            return (
+                Some(
+                    word_rectangle
+                        .array
+                        .map(|possibilities| possibilities.into_iter().copied().next()),
+                ),
+                1,
+            )
+        }
+        Some((_, 0)) => return (None, 1),
+        Some((idx, _)) => idx,
+    };
+    let options = &word_rectangle.array[target];
+    let mut pb = if show_pb {
+        Some(ProgressBar::new(options.len() as u64))
     } else {
-        Col { x: best_col_ix }
+        None
     };
     let mut call_count = 1;
-    match word_rectangle.lookup_slot_matches(&target_slot).0 {
-        Filled => return (Some(word_rectangle.array.clone()), call_count),
-        Unconstrained => {
-            let matches = match target_slot {
-                Row { .. } => unfiltered_row_candidates.into_iter(),
-                Col { .. } => unfiltered_col_candidates.into_iter(),
-            };
-            let mut pb = if show_pb {
-                Some(ProgressBar::new(matches.len() as u64))
-            } else {
-                None
-            };
-            for word in matches {
-                for p in &mut pb {
-                    p.inc();
-                }
-                {
-                    let new_rectangle =
-                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let (child_result, child_call_count) =
-                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
-                    call_count += child_call_count;
-                    if child_result.is_some() {
-                        return (child_result, call_count);
-                    }
-                }
-            }
+    for c in options.iter() {
+        if let Some(p) = pb.as_mut() {
+            p.inc();
         }
-        BorrowedMatches { matches } => {
-            let mut pb = if show_pb {
-                Some(ProgressBar::new(matches.len() as u64))
-            } else {
-                None
-            };
-            for word in matches {
-                for p in &mut pb {
-                    p.inc();
-                }
-                {
-                    let new_rectangle =
-                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let (child_result, child_call_count) =
-                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
-                    call_count += child_call_count;
-                    if child_result.is_some() {
-                        return (child_result, call_count);
-                    }
-                }
-            }
+        let new_rectangle = match word_rectangle.apply_constraint(
+            target,
+            *c,
+            matches_slab,
+            possible_chars_slab,
+            caches,
+        ) {
+            Some(rect) => rect,
+            None => continue,
+        };
+        let (child_result, child_call_count) = step_word_rectangle(
+            words_by_length,
+            matches_slab,
+            possible_chars_slab,
+            caches,
+            new_rectangle,
+            false,
+        );
+        call_count += child_call_count;
+        if child_result.is_some() {
+            return (child_result, call_count);
         }
-    };
+    }
     (None, call_count)
 }
 

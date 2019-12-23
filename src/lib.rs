@@ -7,7 +7,7 @@ extern crate ascii;
 use ascii::{AsciiChar, AsciiString};
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 
 extern crate itertools;
@@ -28,46 +28,78 @@ use typed_arena::Arena;
 const EMPTY_ARRAY: [AsciiChar; 0] = [];
 const EMPTY_NESTED_ARRAY: [&[AsciiChar]; 0] = [];
 
-#[derive(Debug, Clone)]
+type Cache<'w> = FnvHashMap<u128, BorrowedSlotConstraint<'w>>;
+
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedSlotConstraint<'w> {
+    matches: &'w [&'w [AsciiChar]],
+    possible_chars: &'w [HashSet<AsciiChar>],
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum WordsMatch<'w> {
     Unconstrained,
-    Filled,
-    BorrowedMatches { matches: &'w [&'w [AsciiChar]] },
+    Filled(&'w [AsciiChar]),
+    BorrowedMatches {
+        constraint: BorrowedSlotConstraint<'w>,
+        prehash: u128,
+    },
 }
-use WordsMatch::*;
 
-impl<'w> Ord for WordsMatch<'w> {
-    fn cmp(&self, other: &WordsMatch) -> Ordering {
-        match (self, other) {
-            (&Filled, &Filled) => Ordering::Equal,
-            (&Filled, _) => Ordering::Greater,
-            (_, &Filled) => Ordering::Less,
-            (&Unconstrained, &Unconstrained) => Ordering::Equal,
-            (&Unconstrained, _) => Ordering::Greater,
-            (_, &Unconstrained) => Ordering::Less,
-            (&BorrowedMatches { matches: ref l }, &BorrowedMatches { matches: ref r }) => {
-                l.len().cmp(&r.len())
+impl<'w> WordsMatch<'w> {
+    pub fn fix_char(
+        self,
+        ix: usize,
+        len: usize,
+        c: AsciiChar,
+        matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+        possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+        cache: &mut Cache<'w>,
+    ) -> Self {
+        match self {
+            Filled(_) => panic!("cannot fix char in filled slot"),
+            BorrowedMatches {
+                constraint,
+                prehash,
+            } => {
+                prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (len - ix - 1));
+                let new_constraint = cache.entry(prehash).or_insert_with(|| {
+                    let matches = matches_slab
+                        .alloc(
+                            constraint
+                                .matches
+                                .iter()
+                                .cloned()
+                                .filter(|word| word[ix] == c)
+                                .collect::<Vec<&'w [AsciiChar]>>(),
+                        )
+                        .as_slice();
+                    let mut possible_chars_vec = vec![HashSet::new(); len];
+                    for m in matches {
+                        for (possible_char, charset) in m.iter().zip(possible_chars_vec.iter_mut())
+                        {
+                            charset.insert(*possible_char);
+                        }
+                    }
+                    let possible_chars = possible_chars_slab.alloc(possible_chars_vec).as_slice();
+                    BorrowedSlotConstraint {
+                        matches,
+                        possible_chars,
+                    }
+                });
+                if new_constraint.matches.len() == 1 {
+                    Filled(new_constraint.matches[0])
+                } else {
+                    BorrowedMatches {
+                        constraint: *new_constraint,
+                        prehash,
+                    }
+                }
             }
         }
     }
 }
-
-impl<'w> PartialOrd for WordsMatch<'w> {
-    fn partial_cmp(&self, other: &WordsMatch) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'w> PartialEq for WordsMatch<'w> {
-    fn eq(&self, other: &WordsMatch) -> bool {
-        match self.cmp(other) {
-            Ordering::Equal => true,
-            _ => false,
-        }
-    }
-}
-
-impl<'w> Eq for WordsMatch<'w> {}
+use WordsMatch::*;
 
 pub struct CrushedWords {
     length: usize,
@@ -169,20 +201,20 @@ where
 
 #[derive(Debug, Clone)]
 pub struct WordRectangle<'w> {
-    pub array: Array2<Option<AsciiChar>>,
-    pub row_matches: Vec<(WordsMatch<'w>, u128)>,
-    pub col_matches: Vec<(WordsMatch<'w>, u128)>,
+    pub array: Array2<HashSet<AsciiChar>>,
+    pub row_matches: Vec<WordsMatch<'w>>,
+    pub col_matches: Vec<WordsMatch<'w>>,
 }
 
 impl<'w> WordRectangle<'w> {
-    fn lookup_slot_matches(&self, slot: &Slot) -> &(WordsMatch, u128) {
+    fn lookup_slot_matches(&self, slot: &Slot) -> &WordsMatch {
         match *slot {
             Row { y } => &self.row_matches[y],
             Col { x } => &self.col_matches[x],
         }
     }
 
-    fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut (WordsMatch<'w>, u128) {
+    fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut WordsMatch<'w> {
         match *slot {
             Row { y } => &mut self.row_matches[y],
             Col { x } => &mut self.col_matches[x],
@@ -198,59 +230,42 @@ impl<'w> WordRectangle<'w> {
 
     fn apply_constraint<'a, 'b, 'c>(
         &'a self,
-        slot: &Slot,
-        word: &'b [AsciiChar],
-        slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-        caches: &'c mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
+        (col_ix, row_ix): (usize, usize),
+        c: AsciiChar,
+        matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+        possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+        caches: &'c mut FnvHashMap<usize, Cache<'w>>,
     ) -> WordRectangle<'w> {
         let mut new_rectangle: WordRectangle<'w> = (*self).clone();
-        {
-            let perp_len = match *slot {
-                Row { .. } => new_rectangle.height(),
-                Col { .. } => new_rectangle.width(),
-            };
-            let cache = caches.get_mut(&perp_len).expect("Cache missing");
-            let (perp_slots, perp_matches, pos) = match *slot {
-                Row { y } => (
-                    new_rectangle.array.gencolumns_mut(),
-                    &mut new_rectangle.col_matches,
-                    y,
-                ),
-                Col { x } => (
-                    new_rectangle.array.genrows_mut(),
-                    &mut new_rectangle.row_matches,
-                    x,
-                ),
-            };
-            Zip::from(word).and(perp_slots).and(perp_matches).apply(
-                |&c, mut perp_slot, (perp_match, prehash)| {
-                    perp_slot[pos] = Some(c);
-                    if let Filled = *perp_match {
-                        return;
-                    }
-                    *prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
-                    let cache_entry = cache.entry(*prehash);
-                    let matches: &'w [&'w [AsciiChar]] =
-                        *cache_entry.or_insert_with(|| match *perp_match {
-                            Filled => panic!("We should have already returned"),
-                            // All single-character constraints are pre-populated into the cache,
-                            // so a cache miss here means there's nothing to find.
-                            Unconstrained => &EMPTY_NESTED_ARRAY,
-                            BorrowedMatches { ref matches } => slab
-                                .alloc(
-                                    matches
-                                        .iter()
-                                        .cloned()
-                                        .filter(|word| word[pos] == c)
-                                        .collect::<Vec<&'w [AsciiChar]>>(),
-                                )
-                                .as_slice(),
-                        });
-                    *perp_match = BorrowedMatches { matches }
-                },
-            );
+        let width = new_rectangle.width();
+        let height = new_rectangle.height();
+        let row_cache = caches.get_mut(&width).expect("Cache missing");
+        let row_constraint = &mut self.row_matches[row_ix];
+        *row_constraint = row_constraint.fix_char(
+            col_ix,
+            width,
+            c,
+            matches_slab,
+            possible_chars_slab,
+            row_cache,
+        );
+        let col_cache = caches.get_mut(&height).expect("Cache missing");
+        let col_constraint = &mut self.col_matches[col_ix];
+        *col_constraint = col_constraint.fix_char(
+            row_ix,
+            height,
+            c,
+            matches_slab,
+            possible_chars_slab,
+            col_cache,
+        );
+        match row_constraint {
+            BorrowedMatches { constraint, .. } => {
+                Zip::from(constraint.possible_chars)
+                    .and(new_rectangle.array.gencolumns_mut())
+                    .apply(|&possible_chars, col| {});
+            }
         }
-        *new_rectangle.lookup_slot_matches_mut(slot) = (Filled, 0);
         new_rectangle
     }
 }

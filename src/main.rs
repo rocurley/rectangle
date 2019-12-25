@@ -1,20 +1,15 @@
 extern crate ascii;
-use ascii::AsciiChar;
-
+use ascii::{AsAsciiStr, AsciiChar, AsciiStr};
+use std::collections::HashSet;
 use std::time::Instant;
-
 extern crate ndarray;
 use ndarray::Array;
-
 extern crate cpuprofiler;
 use cpuprofiler::PROFILER;
-
 extern crate typed_arena;
 use typed_arena::Arena;
-
 #[macro_use]
 extern crate clap;
-
 extern crate rectangle;
 use rectangle::{
     load_words, prepopulate_cache, show_word_rectangle, step_word_rectangle, WordRectangle,
@@ -44,9 +39,10 @@ fn main() {
         (x, None) => x,
         (None, x) => x,
     };
-    let slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
+    let matches_slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
+    let possible_chars_slab: Arena<Vec<HashSet<AsciiChar>>> = Arena::new();
     let words_by_length = load_words(words_path, min_len, max_len);
-    let mut caches = prepopulate_cache(&slab, &words_by_length);
+    let mut caches = prepopulate_cache(&matches_slab, &possible_chars_slab, &words_by_length);
     let mut dims = Vec::new();
     for x in words_by_length.keys() {
         for y in words_by_length.keys() {
@@ -60,15 +56,19 @@ fn main() {
         .map(|(&l, words)| (l, words.borrow()))
         .collect();
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
+    let alphabet_string: &AsciiStr = "abcdefghijklmnopqrstuvwxyz"
+        .as_ascii_str()
+        .expect("Couldn't construct alphabet");
+    let alphabet: HashSet<AsciiChar> = alphabet_string.chars().copied().collect();
     for &(&w, &h) in dims.iter() {
-        let empty = Array::from_elem((h, w), None);
+        let empty = Array::from_elem((h, w), alphabet.clone());
         let mut row_matches = Vec::new();
         for _ in 0..h {
-            row_matches.push((Unconstrained, 0))
+            row_matches.push(Unconstrained)
         }
         let mut col_matches = Vec::new();
         for _ in 0..w {
-            col_matches.push((Unconstrained, 0))
+            col_matches.push(Unconstrained)
         }
         let start = WordRectangle {
             array: empty,
@@ -82,7 +82,14 @@ fn main() {
             .start(format!("profiling/{}x{}.profile", w, h))
             .unwrap();
         let start_time = Instant::now();
-        match step_word_rectangle(&words_by_length_borrowed, &slab, &mut caches, start, true) {
+        match step_word_rectangle(
+            &words_by_length_borrowed,
+            &matches_slab,
+            &possible_chars_slab,
+            &mut caches,
+            start,
+            true,
+        ) {
             (None, calls) => println!("No rectangle found in {} calls", calls),
             (Some(rect), calls) => {
                 println!("Found in {} calls:\n{}", calls, show_word_rectangle(&rect))

@@ -7,7 +7,7 @@ authors = ["Roger Curley <rocurley@gmail.com>"]
 debug = true
 
 [dependencies]
-ndarray = "0.10.5"
+ndarray = "0.13.0"
 itertools = "0.6.2"
 pbr = "1.0.0"
 fnv = "1.0.5"

@@ -58,7 +58,10 @@ impl<'w> WordsMatch<'w> {
         cache: &mut Cache<'w>,
     ) -> Self {
         match self {
-            Filled(_) => panic!("cannot fix char in filled slot"),
+            Filled(word) => {
+                assert_eq!(word[ix], c);
+                return self;
+            }
             NoMatches => panic!("cannot fix char if there are no matches"),
             BorrowedMatches {
                 constraint,
@@ -242,7 +245,7 @@ impl<'w> WordRectangle<'w> {
 
     fn apply_constraint<'a, 'b, 'c>(
         &'a self,
-        (col_ix, row_ix): (usize, usize),
+        (y, x): (usize, usize),
         c: AsciiChar,
         matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
         possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
@@ -251,61 +254,100 @@ impl<'w> WordRectangle<'w> {
         let mut new_rectangle: WordRectangle<'w> = (*self).clone();
         let width = new_rectangle.width();
         let height = new_rectangle.height();
-        let row_cache = caches.get_mut(&width).expect("Cache missing");
-        let row_constraint = &mut new_rectangle.row_matches[row_ix];
-        *row_constraint = row_constraint.fix_char(
-            col_ix,
-            width,
-            c,
-            matches_slab,
-            possible_chars_slab,
-            row_cache,
-        );
-        let col_cache = caches.get_mut(&height).expect("Cache missing");
-        let col_constraint = &mut new_rectangle.col_matches[col_ix];
-        *col_constraint = col_constraint.fix_char(
-            row_ix,
-            height,
-            c,
-            matches_slab,
-            possible_chars_slab,
-            col_cache,
-        );
-        match row_constraint {
-            BorrowedMatches { constraint, .. } => {
-                Zip::from(constraint.possible_chars)
-                    .and(new_rectangle.array.gencolumns_mut())
-                    .apply(|possible_chars, mut col| {
-                        col[row_ix] = col[row_ix].intersection(possible_chars).copied().collect();
-                    });
+        let mut to_fix = vec![(c, y, x)];
+        while let Some((c, y, x)) = to_fix.pop() {
+            let row_cache = caches.get_mut(&width).expect("Cache missing");
+            let row_constraint = &mut new_rectangle.row_matches[y];
+            *row_constraint =
+                row_constraint.fix_char(x, width, c, matches_slab, possible_chars_slab, row_cache);
+            let col_cache = caches.get_mut(&height).expect("Cache missing");
+            let col_constraint = &mut new_rectangle.col_matches[x];
+            *col_constraint =
+                col_constraint.fix_char(y, height, c, matches_slab, possible_chars_slab, col_cache);
+            match row_constraint {
+                BorrowedMatches { constraint, .. } => {
+                    Zip::indexed(constraint.possible_chars)
+                        .and(new_rectangle.array.gencolumns_mut())
+                        .apply(|ix, possible_chars, mut col| {
+                            let prior_len = col[y].len();
+                            col[y] = col[y].intersection(possible_chars).copied().collect();
+                            if col[y].len() == 1 && prior_len != 1 {
+                                to_fix.push((
+                                    col[y]
+                                        .iter()
+                                        .copied()
+                                        .next()
+                                        .expect("Expected 1 possible char"),
+                                    y,
+                                    ix,
+                                ));
+                            }
+                        });
+                }
+                Filled(word) => {
+                    let legal = Zip::from(*word)
+                        .and(new_rectangle.array.gencolumns_mut())
+                        .all(|&c, mut col| {
+                            if !col[y].contains(&c) {
+                                return false;
+                            }
+                            col[y] = [c].iter().copied().collect();
+                            true
+                        });
+                    if !legal {
+                        return None;
+                    }
+                }
+                Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
+                NoMatches => return None,
             }
-            Filled(word) => {
-                Zip::from(*word)
-                    .and(new_rectangle.array.gencolumns_mut())
-                    .apply(|&c, mut col| {
-                        col[row_ix] = [c].into_iter().copied().collect();
-                    });
+            match col_constraint {
+                BorrowedMatches { constraint, .. } => {
+                    Zip::indexed(constraint.possible_chars)
+                        .and(new_rectangle.array.genrows_mut())
+                        .apply(|ix, possible_chars, mut row| {
+                            let prior_len = row[x].len();
+                            row[x] = row[x].intersection(possible_chars).copied().collect();
+                            if row[x].len() == 1 && prior_len != 1 {
+                                to_fix.push((
+                                    row[x]
+                                        .iter()
+                                        .copied()
+                                        .next()
+                                        .expect("Expected 1 possible char"),
+                                    ix,
+                                    x,
+                                ));
+                            }
+                        });
+                }
+                Filled(word) => {
+                    let legal = Zip::from(*word).and(new_rectangle.array.genrows_mut()).all(
+                        |&c, mut row| {
+                            if !row[x].contains(&c) {
+                                return false;
+                            }
+                            row[x] = [c].iter().copied().collect();
+                            true
+                        },
+                    );
+                    if !legal {
+                        return None;
+                    }
+                }
+                Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
+                NoMatches => return None,
             }
-            Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
-            NoMatches => return None,
-        }
-        match col_constraint {
-            BorrowedMatches { constraint, .. } => {
-                Zip::from(constraint.possible_chars)
-                    .and(new_rectangle.array.genrows_mut())
-                    .apply(|possible_chars, mut row| {
-                        row[col_ix] = row[col_ix].intersection(possible_chars).copied().collect();
-                    });
+            /*
+            let initial_possibilities: usize = self.array.iter().map(|s| s.len()).product();
+            let final_possibilities: usize = new_rectangle.array.iter().map(|s| s.len()).product();
+            if initial_possibilities <= final_possibilities {
+                dbg!(self);
+                dbg!(x, y);
+                dbg!(new_rectangle);
+                panic!("Not making progress")
             }
-            Filled(word) => {
-                Zip::from(*word)
-                    .and(new_rectangle.array.genrows_mut())
-                    .apply(|&c, mut row| {
-                        row[col_ix] = [c].into_iter().copied().collect();
-                    });
-            }
-            Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
-            NoMatches => return None,
+            */
         }
         Some(new_rectangle)
     }
@@ -331,6 +373,7 @@ pub fn step_word_rectangle<'w, 'a>(
     let width = word_rectangle.array.shape()[1];
     let height = word_rectangle.array.shape()[0];
 
+    //dbg!(&word_rectangle);
     let candidate = word_rectangle
         .array
         .indexed_iter()
@@ -339,6 +382,7 @@ pub fn step_word_rectangle<'w, 'a>(
         .min_by_key(|(_, count)| *count);
     let target = match candidate {
         None => {
+            dbg!(&word_rectangle);
             return (
                 Some(
                     word_rectangle
@@ -346,7 +390,7 @@ pub fn step_word_rectangle<'w, 'a>(
                         .map(|possibilities| possibilities.into_iter().copied().next()),
                 ),
                 1,
-            )
+            );
         }
         Some((_, 0)) => return (None, 1),
         Some((idx, _)) => idx,
@@ -382,6 +426,7 @@ pub fn step_word_rectangle<'w, 'a>(
         );
         call_count += child_call_count;
         if child_result.is_some() {
+            dbg!(&word_rectangle);
             return (child_result, call_count);
         }
     }
@@ -415,27 +460,40 @@ pub fn load_words(
 }
 
 pub fn prepopulate_cache<'w>(
-    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+    matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
+    possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
     words_by_length: &'w HashMap<usize, CrushedWords>,
-) -> FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>> {
+) -> FnvHashMap<usize, Cache<'w>> {
     #[allow(clippy::type_complexity)]
-    let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
-        HashMap::new();
+    let mut indices: HashMap<
+        usize,
+        FnvHashMap<(usize, AsciiChar), (Vec<&[AsciiChar]>, Vec<HashSet<AsciiChar>>)>,
+    > = HashMap::new();
     for (l, words) in words_by_length {
         let index = indices.entry(*l).or_insert_with(FnvHashMap::default);
         for word in words.borrow() {
             for (pos, &c) in word.iter().enumerate() {
-                index.entry((pos, c)).or_insert_with(Vec::new).push(word);
+                let (words, chars) = index
+                    .entry((pos, c))
+                    .or_insert_with(|| (Vec::new(), vec![HashSet::new(); *l]));
+                words.push(word);
+                for (charset, c2) in chars.iter_mut().zip(word.iter()) {
+                    charset.insert(*c2);
+                }
             }
         }
     }
-    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
+    let mut caches: FnvHashMap<usize, Cache> = FnvHashMap::default();
     for (l, index) in indices {
         let cache = caches.entry(l).or_insert_with(FnvHashMap::default);
-        for ((pos, c), matches) in index.into_iter() {
+        for ((pos, c), (matches, possible_chars)) in index.into_iter() {
             let mut key = vec![None; l];
             key[pos] = Some(c);
-            cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
+            let constraint = BorrowedSlotConstraint {
+                matches: matches_slab.alloc(matches).as_slice(),
+                possible_chars: possible_chars_slab.alloc(possible_chars),
+            };
+            cache.insert(constraint_hash(key.iter()), constraint);
         }
     }
     caches

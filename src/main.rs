@@ -1,5 +1,3 @@
-extern crate ascii;
-use ascii::{AsAsciiStr, AsciiChar, AsciiStr};
 extern crate enumset;
 use enumset::EnumSet;
 use std::time::Instant;

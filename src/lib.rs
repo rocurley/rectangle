@@ -474,7 +474,7 @@ pub fn step_word_rectangle<'w, 'a>(
         .min_by_key(|(_, count)| *count);
     let target = match candidate {
         None => {
-            dbg!(&word_rectangle);
+            //dbg!(&word_rectangle);
             return (
                 Some(
                     word_rectangle
@@ -518,7 +518,7 @@ pub fn step_word_rectangle<'w, 'a>(
         );
         call_count += child_call_count;
         if child_result.is_some() {
-            dbg!(&word_rectangle);
+            //dbg!(&word_rectangle);
             return (child_result, call_count);
         }
     }

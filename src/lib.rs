@@ -3,12 +3,10 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 
-extern crate ascii;
-use ascii::{AsciiChar, AsciiString};
-
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::iter::FromIterator;
+extern crate enumset;
+use enumset::{EnumSet, EnumSetType};
 
 extern crate itertools;
 use itertools::join;
@@ -25,21 +23,119 @@ use fnv::FnvHashMap;
 extern crate typed_arena;
 use typed_arena::Arena;
 
-const EMPTY_ARRAY: [AsciiChar; 0] = [];
-const EMPTY_NESTED_ARRAY: [&[AsciiChar]; 0] = [];
+const EMPTY_ARRAY: [Alpha; 0] = [];
+const EMPTY_NESTED_ARRAY: [&[Alpha]; 0] = [];
+
+#[derive(Debug, EnumSetType, Hash)]
+pub enum Alpha {
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+}
+impl Alpha {
+    pub fn from_char(c: char) -> Option<Self> {
+        match c {
+            'a' => Some(Alpha::A),
+            'b' => Some(Alpha::B),
+            'c' => Some(Alpha::C),
+            'd' => Some(Alpha::D),
+            'e' => Some(Alpha::E),
+            'f' => Some(Alpha::F),
+            'g' => Some(Alpha::G),
+            'h' => Some(Alpha::H),
+            'i' => Some(Alpha::I),
+            'j' => Some(Alpha::J),
+            'k' => Some(Alpha::K),
+            'l' => Some(Alpha::L),
+            'm' => Some(Alpha::M),
+            'n' => Some(Alpha::N),
+            'o' => Some(Alpha::O),
+            'p' => Some(Alpha::P),
+            'q' => Some(Alpha::Q),
+            'r' => Some(Alpha::R),
+            's' => Some(Alpha::S),
+            't' => Some(Alpha::T),
+            'u' => Some(Alpha::U),
+            'v' => Some(Alpha::V),
+            'w' => Some(Alpha::W),
+            'x' => Some(Alpha::X),
+            'y' => Some(Alpha::Y),
+            'z' => Some(Alpha::Z),
+            _ => None,
+        }
+    }
+    pub fn as_char(self) -> char {
+        match self {
+            Alpha::A => 'a',
+            Alpha::B => 'b',
+            Alpha::C => 'c',
+            Alpha::D => 'd',
+            Alpha::E => 'e',
+            Alpha::F => 'f',
+            Alpha::G => 'g',
+            Alpha::H => 'h',
+            Alpha::I => 'i',
+            Alpha::J => 'j',
+            Alpha::K => 'k',
+            Alpha::L => 'l',
+            Alpha::M => 'm',
+            Alpha::N => 'n',
+            Alpha::O => 'o',
+            Alpha::P => 'p',
+            Alpha::Q => 'q',
+            Alpha::R => 'r',
+            Alpha::S => 's',
+            Alpha::T => 't',
+            Alpha::U => 'u',
+            Alpha::V => 'v',
+            Alpha::W => 'w',
+            Alpha::X => 'x',
+            Alpha::Y => 'y',
+            Alpha::Z => 'z',
+        }
+    }
+    pub fn from_str(word: &str) -> Option<Vec<Self>> {
+        word.chars()
+            .map(Alpha::from_char)
+            .collect::<Option<Vec<Alpha>>>()
+    }
+}
 
 type Cache<'w> = FnvHashMap<u128, BorrowedSlotConstraint<'w>>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BorrowedSlotConstraint<'w> {
-    matches: &'w [&'w [AsciiChar]],
-    possible_chars: &'w [HashSet<AsciiChar>],
+    matches: &'w [&'w [Alpha]],
+    possible_chars: &'w [EnumSet<Alpha>],
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum WordsMatch<'w> {
     Unconstrained,
-    Filled(&'w [AsciiChar]),
+    Filled(&'w [Alpha]),
     BorrowedMatches {
         constraint: BorrowedSlotConstraint<'w>,
         prehash: u128,
@@ -52,9 +148,9 @@ impl<'w> WordsMatch<'w> {
         self,
         ix: usize,
         len: usize,
-        c: AsciiChar,
-        matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-        possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+        c: Alpha,
+        matches_slab: &'w Arena<Vec<&'w [Alpha]>>,
+        possible_chars_slab: &'w Arena<Vec<EnumSet<Alpha>>>,
         cache: &mut Cache<'w>,
     ) -> Self {
         match self {
@@ -67,7 +163,7 @@ impl<'w> WordsMatch<'w> {
                 constraint,
                 mut prehash,
             } => {
-                prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (len - ix - 1));
+                prehash |= (c as u128 + 1) << (5 * (len - ix - 1));
                 let new_constraint = cache.entry(prehash).or_insert_with(|| {
                     let matches = matches_slab
                         .alloc(
@@ -76,10 +172,10 @@ impl<'w> WordsMatch<'w> {
                                 .iter()
                                 .cloned()
                                 .filter(|word| word[ix] == c)
-                                .collect::<Vec<&'w [AsciiChar]>>(),
+                                .collect::<Vec<&'w [Alpha]>>(),
                         )
                         .as_slice();
-                    let mut possible_chars_vec = vec![HashSet::new(); len];
+                    let mut possible_chars_vec = vec![EnumSet::new(); len];
                     for m in matches {
                         for (possible_char, charset) in m.iter().zip(possible_chars_vec.iter_mut())
                         {
@@ -102,7 +198,7 @@ impl<'w> WordsMatch<'w> {
                 }
             }
             Unconstrained => {
-                let prehash = (c as u128 - 'a' as u128 + 1) << (5 * (len - ix - 1));
+                let prehash = (c as u128 + 1) << (5 * (len - ix - 1));
                 // Cache has it if there's anything there, since we prepopulated it.
                 cache
                     .get(&prehash)
@@ -118,13 +214,13 @@ use WordsMatch::*;
 
 pub struct CrushedWords {
     length: usize,
-    chars: Vec<AsciiChar>,
+    chars: Vec<Alpha>,
 }
 
-impl<'a> FromIterator<&'a [AsciiChar]> for CrushedWords {
+impl<'a> FromIterator<&'a [Alpha]> for CrushedWords {
     fn from_iter<T>(x: T) -> Self
     where
-        T: IntoIterator<Item = &'a [AsciiChar]>,
+        T: IntoIterator<Item = &'a [Alpha]>,
     {
         let mut words = CrushedWords::empty();
         for word in x {
@@ -153,7 +249,7 @@ impl<'a> CrushedWords {
             chars: Vec::new(),
         }
     }
-    pub fn push(&'a mut self, v: &[AsciiChar]) -> &'a [AsciiChar] {
+    pub fn push(&'a mut self, v: &[Alpha]) -> &'a [Alpha] {
         if self.chars.is_empty() {
             self.length = v.len();
         } else {
@@ -168,12 +264,12 @@ impl<'a> CrushedWords {
 #[derive(Copy, Clone, Debug)]
 pub struct BorrowedCrushedWords<'w> {
     length: usize,
-    chars: &'w [AsciiChar],
+    chars: &'w [Alpha],
 }
 
 impl<'w> IntoIterator for BorrowedCrushedWords<'w> {
-    type Item = &'w [AsciiChar];
-    type IntoIter = std::slice::ChunksExact<'w, AsciiChar>;
+    type Item = &'w [Alpha];
+    type IntoIter = std::slice::ChunksExact<'w, Alpha>;
     fn into_iter(self) -> Self::IntoIter {
         self.chars.chunks_exact(self.length)
     }
@@ -201,14 +297,14 @@ use Slot::*;
 
 fn constraint_hash<'a, I>(iter: I) -> u128
 where
-    I: Iterator<Item = &'a Option<AsciiChar>>,
+    I: Iterator<Item = &'a Option<Alpha>>,
 {
     let mut hash = 0;
     for option_c in iter {
         hash <<= 5;
         match option_c.as_ref() {
             None => {}
-            Some(&letter) => hash += letter as u128 - 'a' as u128 + 1,
+            Some(&letter) => hash += letter as u128 + 1,
         };
     }
     hash
@@ -216,7 +312,7 @@ where
 
 #[derive(Debug, Clone)]
 pub struct WordRectangle<'w> {
-    pub array: Array2<HashSet<AsciiChar>>,
+    pub array: Array2<EnumSet<Alpha>>,
     pub row_matches: Vec<WordsMatch<'w>>,
     pub col_matches: Vec<WordsMatch<'w>>,
 }
@@ -246,9 +342,9 @@ impl<'w> WordRectangle<'w> {
     fn apply_constraint<'a, 'b, 'c>(
         &'a self,
         (y, x): (usize, usize),
-        c: AsciiChar,
-        matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-        possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+        c: Alpha,
+        matches_slab: &'w Arena<Vec<&'w [Alpha]>>,
+        possible_chars_slab: &'w Arena<Vec<EnumSet<Alpha>>>,
         caches: &'c mut FnvHashMap<usize, Cache<'w>>,
     ) -> Option<WordRectangle<'w>> {
         let mut new_rectangle: WordRectangle<'w> = (*self).clone();
@@ -270,14 +366,10 @@ impl<'w> WordRectangle<'w> {
                         .and(new_rectangle.array.gencolumns_mut())
                         .apply(|ix, possible_chars, mut col| {
                             let prior_len = col[y].len();
-                            col[y] = col[y].intersection(possible_chars).copied().collect();
+                            col[y] = col[y].intersection(*possible_chars);
                             if col[y].len() == 1 && prior_len != 1 {
                                 to_fix.push((
-                                    col[y]
-                                        .iter()
-                                        .copied()
-                                        .next()
-                                        .expect("Expected 1 possible char"),
+                                    col[y].iter().next().expect("Expected 1 possible char"),
                                     y,
                                     ix,
                                 ));
@@ -285,11 +377,14 @@ impl<'w> WordRectangle<'w> {
                         });
                 }
                 Filled(word) => {
-                    let legal = Zip::from(*word)
+                    let legal = Zip::indexed(*word)
                         .and(new_rectangle.array.gencolumns_mut())
-                        .all(|&c, mut col| {
-                            if !col[y].contains(&c) {
+                        .all(|ix, &c, mut col| {
+                            if !col[y].contains(c) {
                                 return false;
+                            }
+                            if col[y].len() > 1 {
+                                to_fix.push((c, y, ix));
                             }
                             col[y] = [c].iter().copied().collect();
                             true
@@ -307,14 +402,10 @@ impl<'w> WordRectangle<'w> {
                         .and(new_rectangle.array.genrows_mut())
                         .apply(|ix, possible_chars, mut row| {
                             let prior_len = row[x].len();
-                            row[x] = row[x].intersection(possible_chars).copied().collect();
+                            row[x] = row[x].intersection(*possible_chars);
                             if row[x].len() == 1 && prior_len != 1 {
                                 to_fix.push((
-                                    row[x]
-                                        .iter()
-                                        .copied()
-                                        .next()
-                                        .expect("Expected 1 possible char"),
+                                    row[x].iter().next().expect("Expected 1 possible char"),
                                     ix,
                                     x,
                                 ));
@@ -322,15 +413,18 @@ impl<'w> WordRectangle<'w> {
                         });
                 }
                 Filled(word) => {
-                    let legal = Zip::from(*word).and(new_rectangle.array.genrows_mut()).all(
-                        |&c, mut row| {
-                            if !row[x].contains(&c) {
+                    let legal = Zip::indexed(*word)
+                        .and(new_rectangle.array.genrows_mut())
+                        .all(|ix, &c, mut row| {
+                            if !row[x].contains(c) {
                                 return false;
+                            }
+                            if row[x].len() > 1 {
+                                to_fix.push((c, ix, x));
                             }
                             row[x] = [c].iter().copied().collect();
                             true
-                        },
-                    );
+                        });
                     if !legal {
                         return None;
                     }
@@ -338,22 +432,20 @@ impl<'w> WordRectangle<'w> {
                 Unconstrained => panic!("output of fix_char cannot be Unconstrained"),
                 NoMatches => return None,
             }
-            /*
-            let initial_possibilities: usize = self.array.iter().map(|s| s.len()).product();
-            let final_possibilities: usize = new_rectangle.array.iter().map(|s| s.len()).product();
+            let initial_possibilities: usize = self.array.iter().map(|s| s.len()).sum();
+            let final_possibilities: usize = new_rectangle.array.iter().map(|s| s.len()).sum();
             if initial_possibilities <= final_possibilities {
                 dbg!(self);
                 dbg!(x, y);
                 dbg!(new_rectangle);
                 panic!("Not making progress")
             }
-            */
         }
         Some(new_rectangle)
     }
 }
 
-pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String {
+pub fn show_word_rectangle(word_rectangle: &Array2<Option<Alpha>>) -> String {
     let rows = word_rectangle.outer_iter().map(|row| {
         row.iter()
             .map(|c| c.map_or('.', |c| c.as_char()))
@@ -364,12 +456,12 @@ pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String
 
 pub fn step_word_rectangle<'w, 'a>(
     words_by_length: &'w HashMap<usize, BorrowedCrushedWords<'w>>,
-    matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-    possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+    matches_slab: &'w Arena<Vec<&'w [Alpha]>>,
+    possible_chars_slab: &'w Arena<Vec<EnumSet<Alpha>>>,
     caches: &'a mut FnvHashMap<usize, Cache<'w>>,
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
-) -> (Option<Array2<Option<AsciiChar>>>, u64) {
+) -> (Option<Array2<Option<Alpha>>>, u64) {
     let width = word_rectangle.array.shape()[1];
     let height = word_rectangle.array.shape()[0];
 
@@ -387,7 +479,7 @@ pub fn step_word_rectangle<'w, 'a>(
                 Some(
                     word_rectangle
                         .array
-                        .map(|possibilities| possibilities.into_iter().copied().next()),
+                        .map(|possibilities| possibilities.into_iter().next()),
                 ),
                 1,
             );
@@ -408,7 +500,7 @@ pub fn step_word_rectangle<'w, 'a>(
         }
         let new_rectangle = match word_rectangle.apply_constraint(
             target,
-            *c,
+            c,
             matches_slab,
             possible_chars_slab,
             caches,
@@ -440,7 +532,7 @@ pub fn load_words(
 ) -> HashMap<usize, CrushedWords> {
     let f = File::open(words_path).expect("Could not open file");
     let file = BufReader::new(&f);
-    let words: Vec<AsciiString> = file
+    let words: Vec<Vec<Alpha>> = file
         .lines()
         .map(|line| line.expect("Not a line or something"))
         .filter(|word| {
@@ -448,7 +540,7 @@ pub fn load_words(
                 && word.len() >= min_len
                 && max_len.map_or(true, |max| word.len() < max)
         })
-        .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
+        .map(|word| Alpha::from_str(&word).expect("Somehow not ascii"))
         .collect();
     let mut words_by_length = HashMap::new();
     for word in words.iter() {
@@ -460,14 +552,14 @@ pub fn load_words(
 }
 
 pub fn prepopulate_cache<'w>(
-    matches_slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-    possible_chars_slab: &'w Arena<Vec<HashSet<AsciiChar>>>,
+    matches_slab: &'w Arena<Vec<&'w [Alpha]>>,
+    possible_chars_slab: &'w Arena<Vec<EnumSet<Alpha>>>,
     words_by_length: &'w HashMap<usize, CrushedWords>,
 ) -> FnvHashMap<usize, Cache<'w>> {
     #[allow(clippy::type_complexity)]
     let mut indices: HashMap<
         usize,
-        FnvHashMap<(usize, AsciiChar), (Vec<&[AsciiChar]>, Vec<HashSet<AsciiChar>>)>,
+        FnvHashMap<(usize, Alpha), (Vec<&[Alpha]>, Vec<EnumSet<Alpha>>)>,
     > = HashMap::new();
     for (l, words) in words_by_length {
         let index = indices.entry(*l).or_insert_with(FnvHashMap::default);
@@ -475,7 +567,7 @@ pub fn prepopulate_cache<'w>(
             for (pos, &c) in word.iter().enumerate() {
                 let (words, chars) = index
                     .entry((pos, c))
-                    .or_insert_with(|| (Vec::new(), vec![HashSet::new(); *l]));
+                    .or_insert_with(|| (Vec::new(), vec![EnumSet::new(); *l]));
                 words.push(word);
                 for (charset, c2) in chars.iter_mut().zip(word.iter()) {
                     charset.insert(*c2);

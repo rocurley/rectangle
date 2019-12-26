@@ -1,6 +1,7 @@
 extern crate ascii;
 use ascii::{AsAsciiStr, AsciiChar, AsciiStr};
-use std::collections::HashSet;
+extern crate enumset;
+use enumset::EnumSet;
 use std::time::Instant;
 extern crate ndarray;
 use ndarray::Array;
@@ -12,7 +13,7 @@ use typed_arena::Arena;
 extern crate clap;
 extern crate rectangle;
 use rectangle::{
-    load_words, prepopulate_cache, show_word_rectangle, step_word_rectangle, WordRectangle,
+    load_words, prepopulate_cache, show_word_rectangle, step_word_rectangle, Alpha, WordRectangle,
     WordsMatch::*,
 };
 
@@ -39,8 +40,8 @@ fn main() {
         (x, None) => x,
         (None, x) => x,
     };
-    let matches_slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
-    let possible_chars_slab: Arena<Vec<HashSet<AsciiChar>>> = Arena::new();
+    let matches_slab: Arena<Vec<&[Alpha]>> = Arena::new();
+    let possible_chars_slab: Arena<Vec<EnumSet<Alpha>>> = Arena::new();
     let words_by_length = load_words(words_path, min_len, max_len);
     let mut caches = prepopulate_cache(&matches_slab, &possible_chars_slab, &words_by_length);
     let mut dims = Vec::new();
@@ -56,10 +57,12 @@ fn main() {
         .map(|(&l, words)| (l, words.borrow()))
         .collect();
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
-    let alphabet_string: &AsciiStr = "abcdefghijklmnopqrstuvwxyz"
-        .as_ascii_str()
-        .expect("Couldn't construct alphabet");
-    let alphabet: HashSet<AsciiChar> = alphabet_string.chars().copied().collect();
+    let alphabet_string = "abcdefghijklmnopqrstuvwxyz";
+    let alphabet: EnumSet<Alpha> = alphabet_string
+        .chars()
+        .map(Alpha::from_char)
+        .collect::<Option<EnumSet<Alpha>>>()
+        .expect("Somehow not alpha");
     for &(&w, &h) in dims.iter() {
         let empty = Array::from_elem((h, w), alphabet.clone());
         let mut row_matches = Vec::new();

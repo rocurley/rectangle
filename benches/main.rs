@@ -30,7 +30,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     col_cache: &caches[&DIM],
                     col_matches: col_matches,
                 };
-                step_word_rectangle(start, false)
+                step_word_rectangle(start, false, 0)
             })
         },
     );

@@ -49,7 +49,7 @@ fn main() {
             .start(format!("profiling/{}x{}.profile", w, h))
             .unwrap();
         let start_time = Instant::now();
-        match step_word_rectangle(start, true) {
+        match step_word_rectangle(start, true, 0) {
             (None, calls) => println!("No rectangle found in {} calls", calls),
             (Some(rect), calls) => println!("Found in {} calls:\n{}", calls, rect.show()),
         }

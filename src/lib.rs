@@ -187,8 +187,12 @@ impl<'w> WordsMatch<'w> {
             Matches(mut constraint) => {
                 let cache_entry = &cache.positions[ix][c];
                 constraint.words.difference_with(&cache_entry.words);
-                filter_chars(&mut constraint, cache);
-                Matches(constraint)
+                if constraint.words.is_empty() {
+                    NoMatches
+                } else {
+                    filter_chars(&mut constraint, cache);
+                    Matches(constraint)
+                }
             }
             Unconstrained => Matches(cache.unconstrained.clone()).ban_char(ix, c, cache),
         }
@@ -365,7 +369,6 @@ impl<'w> WordRectangle<'w> {
                 WordsMatch::NoMatches => panic!("Called find_fork_point on dead rectangle"),
                 WordsMatch::Unconstrained => Some((y, &self.row_cache.unconstrained)),
             })
-            .filter(|(_, constraint)| constraint.words.len() > 1)
             .flat_map(|(y, constraint)| {
                 constraint
                     .possible_chars
@@ -373,6 +376,7 @@ impl<'w> WordRectangle<'w> {
                     .enumerate()
                     .map(move |(x, possible_chars)| (y, x, possible_chars))
             })
+            .filter(|(_, _, possible_chars)| possible_chars.len() > 1)
             .min_by_key(|(_, _, possible_chars)| possible_chars.len())
             .map(|(y, x, _)| (y, x))
     }
@@ -422,7 +426,11 @@ impl<'w> WordRectangle<'w> {
 pub fn step_word_rectangle<'w>(
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
+    recursion_depth: u16,
 ) -> (Option<WordRectangle<'w>>, u64) {
+    if recursion_depth > (word_rectangle.width() * word_rectangle.height()) as u16 + 1 {
+        panic!("Exceeded max recursion depth")
+    }
     let reduced = match word_rectangle.reduce() {
         None => return (None, 1),
         Some(r) => r,
@@ -432,7 +440,8 @@ pub fn step_word_rectangle<'w>(
         Some(fork) => fork,
     };
     let options = reduced.row_matches[y].possible_chars(reduced.row_cache, x);
-
+    //dbg!(&reduced.row_matches, &reduced.col_matches);
+    //dbg!(y, x, options);
     let mut pb = if show_pb {
         Some(ProgressBar::new(options.len() as u64))
     } else {
@@ -443,7 +452,7 @@ pub fn step_word_rectangle<'w>(
         let mut fixed = reduced.clone();
         fixed.row_matches[y].fix_char_mut(x, c, fixed.row_cache);
         fixed.col_matches[x].fix_char_mut(y, c, fixed.row_cache);
-        let (res, count) = step_word_rectangle(fixed, false);
+        let (res, count) = step_word_rectangle(fixed, false, recursion_depth + 1);
         call_count += 1 + count;
         if let Some(success) = res {
             return (Some(success), call_count);

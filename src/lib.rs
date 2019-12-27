@@ -320,7 +320,6 @@ impl<'w> WordRectangle<'w> {
         self.row_matches.len()
     }
     fn reduce(mut self) -> Option<Self> {
-        dbg!("Reducing");
         'restart: loop {
             for (y, row) in self.row_matches.iter_mut().enumerate() {
                 let row_chars = match row {
@@ -343,10 +342,10 @@ impl<'w> WordRectangle<'w> {
                     };
                     let diff = row_char.symmetrical_difference(col_char);
                     if !diff.is_empty() {
-                        for banned_char in dbg!(diff & row_char) {
+                        for banned_char in diff & row_char {
                             row.ban_char_mut(x, banned_char, self.row_cache);
                         }
-                        for banned_char in dbg!(diff & col_char) {
+                        for banned_char in diff & col_char {
                             col.ban_char_mut(y, banned_char, self.col_cache);
                         }
                         continue 'restart;
@@ -366,6 +365,7 @@ impl<'w> WordRectangle<'w> {
                 WordsMatch::NoMatches => panic!("Called find_fork_point on dead rectangle"),
                 WordsMatch::Unconstrained => Some((y, &self.row_cache.unconstrained)),
             })
+            .filter(|(_, constraint)| constraint.words.len() > 1)
             .flat_map(|(y, constraint)| {
                 constraint
                     .possible_chars
@@ -423,7 +423,6 @@ pub fn step_word_rectangle<'w>(
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
 ) -> (Option<WordRectangle<'w>>, u64) {
-    dbg!("Stepping");
     let reduced = match word_rectangle.reduce() {
         None => return (None, 1),
         Some(r) => r,
@@ -500,7 +499,7 @@ pub fn create_cache(words: &CrushedWords) -> Cache {
     .into();
     let mut positions: Vec<EnumMap<Alpha, PartialConstraint>> = vec![empty_map; l];
     let mut unconstrained = PartialConstraint {
-        words: BitSet::from_bit_vec(BitVec::from_elem(l, true)),
+        words: BitSet::from_bit_vec(BitVec::from_elem(words.len(), true)),
         possible_chars: vec![EnumSet::new(); l],
     };
     for (word_ix, word) in words.borrow().into_iter().enumerate() {
@@ -524,3 +523,5 @@ pub fn create_cache(words: &CrushedWords) -> Cache {
 
 #[cfg(test)]
 mod reduce_test;
+#[cfg(test)]
+mod step_test;

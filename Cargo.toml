@@ -16,6 +16,9 @@ clap = "2.26.0"
 ascii = "0.8.6"
 typed-arena = "1.3.0"
 enumset = "0.4.4"
+bit-set = "0.5.1"
+bit-vec = "0.5.1"
+enum-map = "0.6.2"
 
 [dev-dependencies]
 criterion = "0.3"

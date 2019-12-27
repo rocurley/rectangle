@@ -41,20 +41,7 @@ fn main() {
     }
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
     for &(&w, &h) in dims.iter() {
-        let mut row_matches = Vec::new();
-        for _ in 0..h {
-            row_matches.push(Unconstrained)
-        }
-        let mut col_matches = Vec::new();
-        for _ in 0..w {
-            col_matches.push(Unconstrained)
-        }
-        let start = WordRectangle {
-            row_matches,
-            col_matches,
-            row_cache: &caches[&w],
-            col_cache: &caches[&h],
-        };
+        let start = WordRectangle::new(w, h, &caches);
         println!("{}x{}", w, h);
         PROFILER
             .lock()

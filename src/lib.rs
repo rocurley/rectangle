@@ -14,6 +14,7 @@ extern crate enum_map;
 use enum_map::{Enum, EnumMap};
 extern crate itertools;
 use itertools::join;
+use std::hash::BuildHasher;
 
 extern crate pbr;
 use pbr::ProgressBar;
@@ -319,6 +320,7 @@ impl<'w> WordRectangle<'w> {
         self.row_matches.len()
     }
     fn reduce(mut self) -> Option<Self> {
+        dbg!("Reducing");
         'restart: loop {
             for (y, row) in self.row_matches.iter_mut().enumerate() {
                 let row_chars = match row {
@@ -327,13 +329,13 @@ impl<'w> WordRectangle<'w> {
                     Matches(constraint) => constraint.possible_chars.clone(),
                     NoMatches => return None,
                 };
-                for (x, (col, row_char)) in self
+                for (x, (col, &row_char)) in self
                     .col_matches
                     .iter_mut()
                     .zip(row_chars.iter())
                     .enumerate()
                 {
-                    let col_char = match row {
+                    let col_char = match col {
                         Unconstrained => self.col_cache.unconstrained.possible_chars[y],
                         Filled(word) => EnumSet::only(word[y]),
                         Matches(constraint) => constraint.possible_chars[y],
@@ -341,10 +343,10 @@ impl<'w> WordRectangle<'w> {
                     };
                     let diff = row_char.symmetrical_difference(col_char);
                     if !diff.is_empty() {
-                        for banned_char in diff & *row_char {
+                        for banned_char in dbg!(diff & row_char) {
                             row.ban_char_mut(x, banned_char, self.row_cache);
                         }
-                        for banned_char in diff & col_char {
+                        for banned_char in dbg!(diff & col_char) {
                             col.ban_char_mut(y, banned_char, self.col_cache);
                         }
                         continue 'restart;
@@ -399,12 +401,29 @@ impl<'w> WordRectangle<'w> {
         });
         join(rows, "\n")
     }
+    pub fn new<S: BuildHasher>(w: usize, h: usize, caches: &'w HashMap<usize, Cache, S>) -> Self {
+        let mut row_matches = Vec::new();
+        for _ in 0..h {
+            row_matches.push(Unconstrained)
+        }
+        let mut col_matches = Vec::new();
+        for _ in 0..w {
+            col_matches.push(Unconstrained)
+        }
+        WordRectangle {
+            row_matches,
+            col_matches,
+            row_cache: &caches[&w],
+            col_cache: &caches[&h],
+        }
+    }
 }
 
 pub fn step_word_rectangle<'w>(
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
 ) -> (Option<WordRectangle<'w>>, u64) {
+    dbg!("Stepping");
     let reduced = match word_rectangle.reduce() {
         None => return (None, 1),
         Some(r) => r,
@@ -502,3 +521,6 @@ pub fn create_cache(words: &CrushedWords) -> Cache {
         unconstrained,
     }
 }
+
+#[cfg(test)]
+mod reduce_test;

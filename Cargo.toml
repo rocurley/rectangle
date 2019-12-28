@@ -19,6 +19,7 @@ enumset = "0.4.4"
 bit-set = "0.5.1"
 bit-vec = "0.5.1"
 enum-map = "0.6.2"
+rand = "0.7"
 
 [dev-dependencies]
 criterion = "0.3"

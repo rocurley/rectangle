@@ -11,7 +11,7 @@ fn test_step_2x2_multiple() {
     let words = load_words("testdata/evil_words", 0, None);
     let caches = prepopulate_cache(&words);
     let start = WordRectangle::new(2, 2, &caches);
-    let (res, _) = step_word_rectangle(start, false, 0);
+    let (res, _, _) = step_word_rectangle(start, false, 0);
     let res = res.expect("Reduce eliminated rectangle");
     match res.show().as_str() {
         "la\nay" => {}

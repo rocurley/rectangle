@@ -5,7 +5,7 @@ fn test_reduce_2x2() {
     let words = load_words("testdata/short_words", 0, None);
     let caches = prepopulate_cache(&words);
     let start = WordRectangle::new(2, 2, &caches);
-    let reduced = start.reduce().expect("Reduce eliminated rectangle");
+    let reduced = start.reduce().0.expect("Reduce eliminated rectangle");
     assert_eq!("as\nso", reduced.show());
 }
 #[test]
@@ -18,7 +18,7 @@ fn test_reduce_2x2_fail() {
     let caches = prepopulate_cache(&words);
     let start = WordRectangle::new(2, 2, &caches);
     dbg!(&start.row_cache);
-    let reduced = start.reduce().expect("Reduce eliminated rectangle");
+    let reduced = start.reduce().0.expect("Reduce eliminated rectangle");
     assert_eq!("??\n??", reduced.show());
 }
 
@@ -27,6 +27,6 @@ fn test_reduce_4x4() {
     let words = load_words("testdata/short_words", 0, None);
     let caches = prepopulate_cache(&words);
     let start = WordRectangle::new(4, 4, &caches);
-    let reduced = start.reduce().expect("Reduce eliminated rectangle");
+    let reduced = start.reduce().0.expect("Reduce eliminated rectangle");
     assert_eq!("abed\nbeau\nearl\ndull", reduced.show());
 }

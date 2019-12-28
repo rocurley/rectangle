@@ -11,6 +11,8 @@ extern crate bit_vec;
 use bit_vec::BitVec;
 extern crate bit_set;
 use bit_set::BitSet;
+use rand::seq::SliceRandom;
+use rectangle::uset::USet;
 
 fn step_benchmark(c: &mut Criterion) {
     let words_path = "/usr/share/dict/words";
@@ -45,20 +47,11 @@ fn step_benchmark(c: &mut Criterion) {
 
 fn bitset_native_intersection(c: &mut Criterion) {
     let mut rng: StdRng = SeedableRng::seed_from_u64(0);
-    let mut vec1: Vec<u8> = Vec::new();
-    let mut vec2: Vec<u8> = Vec::new();
-    for _ in (1..1000) {
-        vec1.push(rng.gen());
-        vec2.push(rng.gen());
-    }
-    let bitvec1 = BitVec::from_bytes(&vec1);
-    let bitvec2 = BitVec::from_bytes(&vec2);
-    let mut bitset1 = BitSet::from_bit_vec(bitvec1);
-    let bitset2 = BitSet::from_bit_vec(bitvec2);
+    let numbers: Vec<usize> = (0..1000).into_iter().collect();
+    let mut bitset1: BitSet = numbers.choose_multiple(&mut rng, 500).copied().collect();
+    let bitset2: BitSet = numbers.choose_multiple(&mut rng, 500).copied().collect();
     c.bench_function("bitset_native_intersection", |b| {
-        b.iter(|| {
-            bitset1.intersect_with(&bitset2);
-        })
+        b.iter(|| bitset1.intersect_with(&bitset2))
     });
 }
 
@@ -77,9 +70,17 @@ fn bitset_optimized_intersection(c: &mut Criterion) {
         vec2.push(rng.gen());
     }
     c.bench_function("bitset_optimized_intersection", |b| {
-        b.iter(|| {
-            bitwise_and(&mut vec1, &vec2);
-        })
+        b.iter(|| bitwise_and(&mut vec1, &vec2))
+    });
+}
+
+fn bitset_uset_intersection(c: &mut Criterion) {
+    let mut rng: StdRng = SeedableRng::seed_from_u64(0);
+    let numbers: Vec<usize> = (0..1000).into_iter().collect();
+    let mut uset1: USet = numbers.choose_multiple(&mut rng, 500).copied().collect();
+    let uset2: USet = numbers.choose_multiple(&mut rng, 500).copied().collect();
+    c.bench_function("bitset_uset_intersection", |b| {
+        b.iter(|| uset1.intersect_with(&uset2))
     });
 }
 
@@ -88,5 +89,6 @@ criterion_group!(
     //step_benchmark,
     bitset_native_intersection,
     bitset_optimized_intersection,
+    bitset_uset_intersection,
 );
 criterion_main!(benches);

@@ -4,7 +4,7 @@ use cpuprofiler::PROFILER;
 #[macro_use]
 extern crate clap;
 extern crate rectangle;
-use rectangle::{load_words, prepopulate_cache, step_word_rectangle, WordRectangle, WordsMatch::*};
+use rectangle::{load_words, prepopulate_cache, step_word_rectangle, WordRectangle};
 
 fn main() {
     let config = clap_app!(rectangle =>

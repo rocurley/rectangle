@@ -3,6 +3,7 @@ use std::mem::size_of;
 
 type Block = u64;
 
+#[derive(Debug, Clone)]
 pub struct USet {
     blocks: Vec<Block>,
 }
@@ -50,6 +51,9 @@ impl USet {
         for (l, r) in self.blocks.iter_mut().zip(other.blocks.iter()) {
             *l &= !r;
         }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.blocks.iter().all(|&b| b == 0)
     }
 }
 

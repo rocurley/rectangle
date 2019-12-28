@@ -323,14 +323,15 @@ impl<'w> WordRectangle<'w> {
     pub fn height(&self) -> usize {
         self.row_matches.len()
     }
-    fn reduce(mut self) -> Option<Self> {
+    fn reduce(mut self) -> (Option<Self>, u64) {
+        let mut call_count = 0;
         'restart: loop {
             for (y, row) in self.row_matches.iter_mut().enumerate() {
                 let row_chars = match row {
                     Unconstrained => self.row_cache.unconstrained.possible_chars.clone(),
                     Filled(word) => word.iter().copied().map(EnumSet::only).collect(),
                     Matches(constraint) => constraint.possible_chars.clone(),
-                    NoMatches => return None,
+                    NoMatches => return (None, call_count),
                 };
                 for (x, (col, &row_char)) in self
                     .col_matches
@@ -342,21 +343,23 @@ impl<'w> WordRectangle<'w> {
                         Unconstrained => self.col_cache.unconstrained.possible_chars[y],
                         Filled(word) => EnumSet::only(word[y]),
                         Matches(constraint) => constraint.possible_chars[y],
-                        NoMatches => return None,
+                        NoMatches => return (None, call_count),
                     };
                     let diff = row_char.symmetrical_difference(col_char);
                     if !diff.is_empty() {
                         for banned_char in diff & row_char {
+                            call_count += 1;
                             row.ban_char_mut(x, banned_char, self.row_cache);
                         }
                         for banned_char in diff & col_char {
+                            call_count += 1;
                             col.ban_char_mut(y, banned_char, self.col_cache);
                         }
                         continue 'restart;
                     }
                 }
             }
-            return Some(self);
+            return (Some(self), call_count);
         }
     }
     fn find_fork_point(&self) -> Option<(usize, usize)> {
@@ -427,16 +430,17 @@ pub fn step_word_rectangle<'w>(
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
     recursion_depth: u16,
-) -> (Option<WordRectangle<'w>>, u64) {
+) -> (Option<WordRectangle<'w>>, u64, u64) {
     if recursion_depth > (word_rectangle.width() * word_rectangle.height()) as u16 + 1 {
         panic!("Exceeded max recursion depth")
     }
-    let reduced = match word_rectangle.reduce() {
-        None => return (None, 1),
+    let (reduced_option, mut reduced_count) = word_rectangle.reduce();
+    let reduced = match reduced_option {
+        None => return (None, 1, reduced_count),
         Some(r) => r,
     };
     let (y, x) = match reduced.find_fork_point() {
-        None => return (Some(reduced), 1),
+        None => return (Some(reduced), 1, reduced_count),
         Some(fork) => fork,
     };
     let options = reduced.row_matches[y].possible_chars(reduced.row_cache, x);
@@ -452,16 +456,18 @@ pub fn step_word_rectangle<'w>(
         let mut fixed = reduced.clone();
         fixed.row_matches[y].fix_char_mut(x, c, fixed.row_cache);
         fixed.col_matches[x].fix_char_mut(y, c, fixed.row_cache);
-        let (res, count) = step_word_rectangle(fixed, false, recursion_depth + 1);
+        let (res, count, new_reduced_count) =
+            step_word_rectangle(fixed, false, recursion_depth + 1);
         call_count += 1 + count;
+        reduced_count += new_reduced_count;
         if let Some(success) = res {
-            return (Some(success), call_count);
+            return (Some(success), call_count, reduced_count);
         }
         if let Some(p) = pb.as_mut() {
             p.inc();
         }
     }
-    (None, call_count)
+    (None, call_count, reduced_count)
 }
 
 pub fn load_words(

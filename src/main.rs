@@ -50,8 +50,15 @@ fn main() {
             .unwrap();
         let start_time = Instant::now();
         match step_word_rectangle(start, true, 0) {
-            (None, calls) => println!("No rectangle found in {} calls", calls),
-            (Some(rect), calls) => println!("Found in {} calls:\n{}", calls, rect.show()),
+            (None, calls, reduced_calls) => {
+                println!("No rectangle found in {}/{} calls", calls, reduced_calls)
+            }
+            (Some(rect), calls, reduced_calls) => println!(
+                "Found in {}/{} calls:\n{}",
+                calls,
+                reduced_calls,
+                rect.show()
+            ),
         }
         let elapsed = start_time.elapsed();
         println!("{:?}", elapsed);

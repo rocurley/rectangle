@@ -344,55 +344,71 @@ impl<'w> WordRectangle<'w> {
     pub fn height(&self) -> usize {
         self.row_matches.len()
     }
-    fn reduce(mut self, counters: &mut Counters) -> Option<Self> {
-        counters.reduce_calls += 1;
-        'restart: loop {
-            for (y, row) in self.row_matches.iter_mut().enumerate() {
+    fn is_dead(&self) -> bool {
+        for row in &self.row_matches {
+            if let NoMatches = row {
+                return true;
+            }
+        }
+        for col in &self.col_matches {
+            if let NoMatches = col {
+                return true;
+            }
+        }
+        false
+    }
+    fn best_reduction_cell(
+        &self,
+    ) -> Option<(usize, usize, EnumSet<Alpha>, EnumSet<Alpha>, EnumSet<Alpha>)> {
+        if self.is_dead() {
+            return None;
+        }
+        self.row_matches
+            .iter()
+            .enumerate()
+            .flat_map(|(y, row)| {
                 let row_chars = match row {
                     Unconstrained => self.row_cache.unconstrained.possible_chars.clone(),
                     Filled(word) => word.iter().copied().map(EnumSet::only).collect(),
                     Matches(constraint) => constraint.possible_chars.clone(),
-                    NoMatches => return None,
+                    NoMatches => panic!("best_reduction_cell called with a NoMatches row"),
                 };
-                for (x, (col, &row_char)) in self
-                    .col_matches
-                    .iter_mut()
-                    .zip(row_chars.iter())
-                    .enumerate()
-                {
+                self.col_matches.iter().enumerate().map(move |(x, col)| {
+                    let row_char = row_chars[x];
                     let col_char = match col {
                         Unconstrained => self.col_cache.unconstrained.possible_chars[y],
                         Filled(word) => EnumSet::only(word[y]),
                         Matches(constraint) => constraint.possible_chars[y],
-                        NoMatches => return None,
+                        NoMatches => panic!("best_reduction_cell called with a NoMatches col"),
                     };
                     let diff = row_char.symmetrical_difference(col_char);
-                    if !diff.is_empty() {
-                        counters.reduce_cells += 1;
-                        let mut did_something = false;
-                        if (diff & row_char).len() > 1 {
-                            for banned_char in diff & row_char {
-                                counters.ban_calls += 1;
-                                row.ban_char_mut(x, banned_char, self.row_cache);
-                            }
-                            filter_chars(row, self.row_cache);
-                            did_something = true;
-                        }
-                        if (diff & col_char).len() > 1 {
-                            for banned_char in diff & col_char {
-                                counters.ban_calls += 1;
-                                col.ban_char_mut(y, banned_char, self.col_cache);
-                            }
-                            filter_chars(col, self.col_cache);
-                            did_something = true;
-                        }
-                        if did_something {
-                            continue 'restart;
-                        }
-                    }
-                }
+                    (y, x, diff, diff & row_char, diff & col_char)
+                })
+            })
+            .filter(|(_, _, diff, _, _)| !diff.is_empty())
+            .max_by_key(|(_, _, diff, _, _)| diff.len())
+    }
+    fn reduce(mut self, counters: &mut Counters) -> Option<Self> {
+        counters.reduce_calls += 1;
+        while let Some((y, x, _, row_diff, col_diff)) = self.best_reduction_cell() {
+            counters.reduce_cells += 1;
+            let row = &mut self.row_matches[y];
+            for banned_char in row_diff {
+                counters.ban_calls += 1;
+                row.ban_char_mut(x, banned_char, self.row_cache);
             }
-            return Some(self);
+            filter_chars(row, self.row_cache);
+            let col = &mut self.col_matches[x];
+            for banned_char in col_diff {
+                counters.ban_calls += 1;
+                col.ban_char_mut(y, banned_char, self.col_cache);
+            }
+            filter_chars(col, self.col_cache);
+        }
+        if self.is_dead() {
+            None
+        } else {
+            Some(self)
         }
     }
     fn find_fork_point(&self) -> Option<(usize, usize)> {

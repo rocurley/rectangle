@@ -337,6 +337,12 @@ pub struct WordRectangle<'w> {
     pub col_cache: &'w Cache,
 }
 
+#[derive(Clone, Copy)]
+pub enum SlotType {
+    Row,
+    Col,
+}
+
 impl<'w> WordRectangle<'w> {
     pub fn width(&self) -> usize {
         self.col_matches.len()
@@ -357,9 +363,7 @@ impl<'w> WordRectangle<'w> {
         }
         false
     }
-    fn best_reduction_cell(
-        &self,
-    ) -> Option<(usize, usize, EnumSet<Alpha>, EnumSet<Alpha>, EnumSet<Alpha>)> {
+    fn best_reduction_cell(&self) -> Option<(usize, usize, EnumSet<Alpha>, SlotType)> {
         if self.is_dead() {
             return None;
         }
@@ -373,37 +377,56 @@ impl<'w> WordRectangle<'w> {
                     Matches(constraint) => constraint.possible_chars.clone(),
                     NoMatches => panic!("best_reduction_cell called with a NoMatches row"),
                 };
-                self.col_matches.iter().enumerate().map(move |(x, col)| {
-                    let row_char = row_chars[x];
-                    let col_char = match col {
-                        Unconstrained => self.col_cache.unconstrained.possible_chars[y],
-                        Filled(word) => EnumSet::only(word[y]),
-                        Matches(constraint) => constraint.possible_chars[y],
-                        NoMatches => panic!("best_reduction_cell called with a NoMatches col"),
-                    };
-                    let diff = row_char.symmetrical_difference(col_char);
-                    (y, x, diff, diff & row_char, diff & col_char)
-                })
+                self.col_matches
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(x, col)| {
+                        let row_char = row_chars[x];
+                        let col_char = match col {
+                            Unconstrained => self.col_cache.unconstrained.possible_chars[y],
+                            Filled(word) => EnumSet::only(word[y]),
+                            Matches(constraint) => constraint.possible_chars[y],
+                            NoMatches => panic!("best_reduction_cell called with a NoMatches col"),
+                        };
+                        let diff = row_char.symmetrical_difference(col_char);
+                        vec![
+                            (y, x, diff & row_char, row_char, SlotType::Row),
+                            (y, x, diff & col_char, col_char, SlotType::Col),
+                        ]
+                        .into_iter()
+                    })
             })
-            .filter(|(_, _, diff, _, _)| !diff.is_empty())
-            .max_by_key(|(_, _, diff, _, _)| diff.len())
+            .filter_map(|(y, x, diff, slot_chars, slot_type)| {
+                if (diff.len() as f32) > slot_chars.len() as f32 * 0.00 {
+                    Some((y, x, diff, slot_type))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(_, _, diff, _)| diff.len())
     }
     fn reduce(mut self, counters: &mut Counters) -> Option<Self> {
         counters.reduce_calls += 1;
-        while let Some((y, x, _, row_diff, col_diff)) = self.best_reduction_cell() {
+        while let Some((y, x, to_ban, slot_type)) = self.best_reduction_cell() {
             counters.reduce_cells += 1;
-            let row = &mut self.row_matches[y];
-            for banned_char in row_diff {
-                counters.ban_calls += 1;
-                row.ban_char_mut(x, banned_char, self.row_cache);
+            match slot_type {
+                SlotType::Row => {
+                    let row = &mut self.row_matches[y];
+                    for banned_char in to_ban {
+                        counters.ban_calls += 1;
+                        row.ban_char_mut(x, banned_char, self.row_cache);
+                    }
+                    filter_chars(row, self.row_cache);
+                }
+                SlotType::Col => {
+                    let col = &mut self.col_matches[x];
+                    for banned_char in to_ban {
+                        counters.ban_calls += 1;
+                        col.ban_char_mut(y, banned_char, self.col_cache);
+                    }
+                    filter_chars(col, self.col_cache);
+                }
             }
-            filter_chars(row, self.row_cache);
-            let col = &mut self.col_matches[x];
-            for banned_char in col_diff {
-                counters.ban_calls += 1;
-                col.ban_char_mut(y, banned_char, self.col_cache);
-            }
-            filter_chars(col, self.col_cache);
         }
         if self.is_dead() {
             None

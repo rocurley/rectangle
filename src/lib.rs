@@ -168,7 +168,6 @@ impl<'w> WordsMatch<'w> {
             Matches(mut constraint) => {
                 let cache_entry = &cache.positions[ix][c];
                 constraint.words.intersect_with(&cache_entry.words);
-                filter_chars(&mut constraint, cache);
                 Matches(constraint)
             }
             Unconstrained => Matches(cache.positions[ix][c].clone()),
@@ -190,7 +189,6 @@ impl<'w> WordsMatch<'w> {
                 if constraint.words.is_empty() {
                     NoMatches
                 } else {
-                    filter_chars(&mut constraint, cache);
                     Matches(constraint)
                 }
             }
@@ -209,7 +207,12 @@ impl<'w> WordsMatch<'w> {
     }
 }
 
-fn filter_chars(constraint: &mut PartialConstraint, cache: &Cache) {
+fn filter_chars(matches: &mut WordsMatch, cache: &Cache) {
+    let constraint = if let Matches(constraint) = matches {
+        constraint
+    } else {
+        return;
+    };
     let PartialConstraint {
         possible_chars,
         words,
@@ -351,10 +354,12 @@ impl<'w> WordRectangle<'w> {
                             call_count += 1;
                             row.ban_char_mut(x, banned_char, self.row_cache);
                         }
+                        filter_chars(row, self.row_cache);
                         for banned_char in diff & col_char {
                             call_count += 1;
                             col.ban_char_mut(y, banned_char, self.col_cache);
                         }
+                        filter_chars(col, self.col_cache);
                         continue 'restart;
                     }
                 }
@@ -455,7 +460,9 @@ pub fn step_word_rectangle<'w>(
     for c in options.into_iter() {
         let mut fixed = reduced.clone();
         fixed.row_matches[y].fix_char_mut(x, c, fixed.row_cache);
-        fixed.col_matches[x].fix_char_mut(y, c, fixed.row_cache);
+        filter_chars(&mut fixed.row_matches[y], fixed.row_cache);
+        fixed.col_matches[x].fix_char_mut(y, c, fixed.col_cache);
+        filter_chars(&mut fixed.col_matches[x], fixed.col_cache);
         let (res, count, new_reduced_count) =
             step_word_rectangle(fixed, false, recursion_depth + 1);
         call_count += 1 + count;

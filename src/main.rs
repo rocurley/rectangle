@@ -4,7 +4,7 @@ use cpuprofiler::PROFILER;
 #[macro_use]
 extern crate clap;
 extern crate rectangle;
-use rectangle::{load_words, prepopulate_cache, step_word_rectangle, WordRectangle};
+use rectangle::{load_words, prepopulate_cache, step_word_rectangle, Counters, WordRectangle};
 
 fn main() {
     let config = clap_app!(rectangle =>
@@ -49,17 +49,12 @@ fn main() {
             .start(format!("profiling/{}x{}.profile", w, h))
             .unwrap();
         let start_time = Instant::now();
-        match step_word_rectangle(start, true, 0) {
-            (None, calls, reduced_calls) => {
-                println!("No rectangle found in {}/{} calls", calls, reduced_calls)
-            }
-            (Some(rect), calls, reduced_calls) => println!(
-                "Found in {}/{} calls:\n{}",
-                calls,
-                reduced_calls,
-                rect.show()
-            ),
+        let mut counters = Counters::new();
+        match step_word_rectangle(start, true, 0, &mut counters) {
+            None => println!("No rectangle found",),
+            Some(rect) => println!("Found:\n{}", rect.show()),
         }
+        println!("{:?}", &counters);
         let elapsed = start_time.elapsed();
         println!("{:?}", elapsed);
         PROFILER.lock().unwrap().stop().unwrap();

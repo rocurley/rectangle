@@ -125,6 +125,24 @@ impl Alpha {
     }
 }
 
+#[derive(Debug)]
+pub struct Counters {
+    pub step_calls: usize,
+    pub reduce_calls: usize,
+    pub reduce_cells: usize,
+    pub ban_calls: usize,
+}
+impl Counters {
+    pub fn new() -> Self {
+        Counters {
+            step_calls: 0,
+            reduce_calls: 0,
+            reduce_cells: 0,
+            ban_calls: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialConstraint {
     words: BitSet,
@@ -326,15 +344,15 @@ impl<'w> WordRectangle<'w> {
     pub fn height(&self) -> usize {
         self.row_matches.len()
     }
-    fn reduce(mut self) -> (Option<Self>, u64) {
-        let mut call_count = 0;
+    fn reduce(mut self, counters: &mut Counters) -> Option<Self> {
+        counters.reduce_calls += 1;
         'restart: loop {
             for (y, row) in self.row_matches.iter_mut().enumerate() {
                 let row_chars = match row {
                     Unconstrained => self.row_cache.unconstrained.possible_chars.clone(),
                     Filled(word) => word.iter().copied().map(EnumSet::only).collect(),
                     Matches(constraint) => constraint.possible_chars.clone(),
-                    NoMatches => return (None, call_count),
+                    NoMatches => return None,
                 };
                 for (x, (col, &row_char)) in self
                     .col_matches
@@ -346,25 +364,35 @@ impl<'w> WordRectangle<'w> {
                         Unconstrained => self.col_cache.unconstrained.possible_chars[y],
                         Filled(word) => EnumSet::only(word[y]),
                         Matches(constraint) => constraint.possible_chars[y],
-                        NoMatches => return (None, call_count),
+                        NoMatches => return None,
                     };
                     let diff = row_char.symmetrical_difference(col_char);
                     if !diff.is_empty() {
-                        for banned_char in diff & row_char {
-                            call_count += 1;
-                            row.ban_char_mut(x, banned_char, self.row_cache);
+                        counters.reduce_cells += 1;
+                        let mut did_something = false;
+                        if (diff & row_char).len() > 1 {
+                            for banned_char in diff & row_char {
+                                counters.ban_calls += 1;
+                                row.ban_char_mut(x, banned_char, self.row_cache);
+                            }
+                            filter_chars(row, self.row_cache);
+                            did_something = true;
                         }
-                        filter_chars(row, self.row_cache);
-                        for banned_char in diff & col_char {
-                            call_count += 1;
-                            col.ban_char_mut(y, banned_char, self.col_cache);
+                        if (diff & col_char).len() > 1 {
+                            for banned_char in diff & col_char {
+                                counters.ban_calls += 1;
+                                col.ban_char_mut(y, banned_char, self.col_cache);
+                            }
+                            filter_chars(col, self.col_cache);
+                            did_something = true;
                         }
-                        filter_chars(col, self.col_cache);
-                        continue 'restart;
+                        if did_something {
+                            continue 'restart;
+                        }
                     }
                 }
             }
-            return (Some(self), call_count);
+            return Some(self);
         }
     }
     fn find_fork_point(&self) -> Option<(usize, usize)> {
@@ -435,17 +463,18 @@ pub fn step_word_rectangle<'w>(
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
     recursion_depth: u16,
-) -> (Option<WordRectangle<'w>>, u64, u64) {
+    counters: &mut Counters,
+) -> Option<WordRectangle<'w>> {
     if recursion_depth > (word_rectangle.width() * word_rectangle.height()) as u16 + 1 {
         panic!("Exceeded max recursion depth")
     }
-    let (reduced_option, mut reduced_count) = word_rectangle.reduce();
+    let reduced_option = word_rectangle.reduce(counters);
     let reduced = match reduced_option {
-        None => return (None, 1, reduced_count),
+        None => return None,
         Some(r) => r,
     };
     let (y, x) = match reduced.find_fork_point() {
-        None => return (Some(reduced), 1, reduced_count),
+        None => return Some(reduced),
         Some(fork) => fork,
     };
     let options = reduced.row_matches[y].possible_chars(reduced.row_cache, x);
@@ -456,25 +485,22 @@ pub fn step_word_rectangle<'w>(
     } else {
         None
     };
-    let mut call_count = 1;
+    counters.step_calls += 1;
     for c in options.into_iter() {
         let mut fixed = reduced.clone();
         fixed.row_matches[y].fix_char_mut(x, c, fixed.row_cache);
         filter_chars(&mut fixed.row_matches[y], fixed.row_cache);
         fixed.col_matches[x].fix_char_mut(y, c, fixed.col_cache);
         filter_chars(&mut fixed.col_matches[x], fixed.col_cache);
-        let (res, count, new_reduced_count) =
-            step_word_rectangle(fixed, false, recursion_depth + 1);
-        call_count += 1 + count;
-        reduced_count += new_reduced_count;
+        let res = step_word_rectangle(fixed, false, recursion_depth + 1, counters);
         if let Some(success) = res {
-            return (Some(success), call_count, reduced_count);
+            return Some(success);
         }
         if let Some(p) = pb.as_mut() {
             p.inc();
         }
     }
-    (None, call_count, reduced_count)
+    None
 }
 
 pub fn load_words(

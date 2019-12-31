@@ -5,13 +5,16 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-use {load_words, prepopulate_cache, step_word_rectangle, Alpha, CrushedWords, WordRectangle};
+use {
+    load_words, prepopulate_cache, step_word_rectangle, Alpha, Counters, CrushedWords,
+    WordRectangle,
+};
 #[test]
 fn test_step_2x2_multiple() {
     let words = load_words("testdata/evil_words", 0, None);
     let caches = prepopulate_cache(&words);
     let start = WordRectangle::new(2, 2, &caches);
-    let (res, _, _) = step_word_rectangle(start, false, 0);
+    let res = step_word_rectangle(start, false, 0, &mut Counters::new());
     let res = res.expect("Reduce eliminated rectangle");
     match res.show().as_str() {
         "la\nay" => {}
@@ -41,6 +44,6 @@ proptest! {
         words_by_length.insert(2, crushed);
         let caches = prepopulate_cache(&words_by_length);
         let start = WordRectangle::new(2, 2, &caches);
-        step_word_rectangle(start, false, 0);
+        step_word_rectangle(start, false, 0, &mut Counters::new());
     }
 }

@@ -149,6 +149,19 @@ pub struct PartialConstraint {
     possible_chars: Vec<EnumSet<Alpha>>,
 }
 
+impl PartialConstraint {
+    fn intersect_with(&mut self, other: &Self) {
+        self.words.intersect_with(&other.words);
+        for (self_chars, other_chars) in self
+            .possible_chars
+            .iter_mut()
+            .zip(other.possible_chars.iter())
+        {
+            *self_chars &= *other_chars;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cache {
     positions: Vec<EnumMap<Alpha, PartialConstraint>>,
@@ -164,6 +177,42 @@ pub enum WordsMatch<'w> {
     NoMatches,
 }
 
+fn union_constraints<'a, I>(mut iter: I) -> Option<PartialConstraint>
+where
+    I: Iterator<Item = &'a PartialConstraint>,
+{
+    let mut acc = iter.next()?.clone();
+    for constraint in iter {
+        acc.words.union_with(&constraint.words);
+        for (acc_chars, chars) in acc
+            .possible_chars
+            .iter_mut()
+            .zip(&constraint.possible_chars)
+        {
+            *acc_chars |= *chars;
+        }
+    }
+    Some(acc)
+}
+
+fn intersect_constraints<'a, I>(mut iter: I) -> Option<PartialConstraint>
+where
+    I: Iterator<Item = &'a PartialConstraint>,
+{
+    let mut acc = iter.next()?.clone();
+    for constraint in iter {
+        acc.words.intersect_with(&constraint.words);
+        for (acc_chars, chars) in acc
+            .possible_chars
+            .iter_mut()
+            .zip(&constraint.possible_chars)
+        {
+            *acc_chars &= *chars;
+        }
+    }
+    Some(acc)
+}
+
 impl<'w> WordsMatch<'w> {
     pub fn possible_chars(&self, cache: &Cache, ix: usize) -> EnumSet<Alpha> {
         match self {
@@ -173,10 +222,10 @@ impl<'w> WordsMatch<'w> {
             NoMatches => EnumSet::empty(),
         }
     }
-    pub fn fix_char(self, ix: usize, c: Alpha, cache: &Cache) -> Self {
+    pub fn fix_chars(self, ix: usize, cs: EnumSet<Alpha>, cache: &Cache) -> Self {
         match self {
             Filled(word) => {
-                if word[ix] == c {
+                if cs.contains(word[ix]) {
                     Filled(word)
                 } else {
                     NoMatches
@@ -184,11 +233,22 @@ impl<'w> WordsMatch<'w> {
             }
             NoMatches => NoMatches,
             Matches(mut constraint) => {
-                let cache_entry = &cache.positions[ix][c];
-                constraint.words.intersect_with(&cache_entry.words);
+                let merged_constraints =
+                    match union_constraints(cs.into_iter().map(|c| &cache.positions[ix][c])) {
+                        None => return NoMatches,
+                        Some(merged_constraints) => merged_constraints,
+                    };
+                constraint.intersect_with(&merged_constraints);
                 Matches(constraint)
             }
-            Unconstrained => Matches(cache.positions[ix][c].clone()),
+            Unconstrained => {
+                let merged_constraints =
+                    match union_constraints(cs.into_iter().map(|c| &cache.positions[ix][c])) {
+                        None => return NoMatches,
+                        Some(merged_constraints) => merged_constraints,
+                    };
+                Matches(merged_constraints)
+            }
         }
     }
     pub fn ban_char(self, ix: usize, c: Alpha, cache: &Cache) -> Self {
@@ -213,10 +273,10 @@ impl<'w> WordsMatch<'w> {
             Unconstrained => Matches(cache.unconstrained.clone()).ban_char(ix, c, cache),
         }
     }
-    pub fn fix_char_mut(&mut self, ix: usize, c: Alpha, cache: &Cache) {
+    pub fn fix_chars_mut(&mut self, ix: usize, cs: EnumSet<Alpha>, cache: &Cache) {
         let mut tmp = WordsMatch::NoMatches;
         std::mem::swap(&mut tmp, self);
-        *self = tmp.fix_char(ix, c, cache);
+        *self = tmp.fix_chars(ix, cs, cache);
     }
     pub fn ban_char_mut(&mut self, ix: usize, c: Alpha, cache: &Cache) {
         let mut tmp = WordsMatch::NoMatches;
@@ -504,7 +564,7 @@ pub fn step_word_rectangle<'w>(
     recursion_depth: u16,
     counters: &mut Counters,
 ) -> Option<WordRectangle<'w>> {
-    if recursion_depth > (word_rectangle.width() * word_rectangle.height()) as u16 + 1 {
+    if recursion_depth > (word_rectangle.width() * word_rectangle.height() * 26) as u16 + 1 {
         panic!("Exceeded max recursion depth")
     }
     let reduced_option = word_rectangle.reduce(counters);
@@ -525,11 +585,11 @@ pub fn step_word_rectangle<'w>(
         None
     };
     counters.step_calls += 1;
-    for c in options.into_iter() {
+    for cs in shard_chars(options) {
         let mut fixed = reduced.clone();
-        fixed.row_matches[y].fix_char_mut(x, c, fixed.row_cache);
+        fixed.row_matches[y].fix_chars_mut(x, cs, fixed.row_cache);
         filter_chars(&mut fixed.row_matches[y], fixed.row_cache);
-        fixed.col_matches[x].fix_char_mut(y, c, fixed.col_cache);
+        fixed.col_matches[x].fix_chars_mut(y, cs, fixed.col_cache);
         filter_chars(&mut fixed.col_matches[x], fixed.col_cache);
         let res = step_word_rectangle(fixed, false, recursion_depth + 1, counters);
         if let Some(success) = res {
@@ -605,6 +665,41 @@ pub fn create_cache(words: &CrushedWords) -> Cache {
     Cache {
         positions,
         unconstrained,
+    }
+}
+
+struct CharSubsets<I>
+where
+    I: Iterator<Item = Alpha>,
+{
+    chunk_size: usize,
+    iter: I,
+}
+
+impl<I> Iterator for CharSubsets<I>
+where
+    I: Iterator<Item = Alpha>,
+{
+    type Item = EnumSet<Alpha>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let out: EnumSet<Alpha> = (0..self.chunk_size)
+            .zip(&mut self.iter)
+            .map(|(_, c)| c)
+            .collect();
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+}
+
+fn shard_chars(chars: EnumSet<Alpha>) -> impl Iterator<Item = EnumSet<Alpha>> {
+    const MAX_LEN: usize = 2;
+    let chunk_size = (chars.len() - 1) / MAX_LEN + 1;
+    CharSubsets {
+        chunk_size,
+        iter: chars.into_iter(),
     }
 }
 

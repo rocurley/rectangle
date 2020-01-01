@@ -571,44 +571,40 @@ impl<'w> WordRectangle<'w> {
 }
 
 pub fn step_word_rectangle<'w>(
-    word_rectangle: WordRectangle<'w>,
+    initial_word_rectangle: WordRectangle<'w>,
     show_pb: bool,
     recursion_depth: u16,
     counters: &mut Counters,
 ) -> Option<WordRectangle<'w>> {
-    if recursion_depth > (word_rectangle.width() * word_rectangle.height() * 26) as u16 + 1 {
-        panic!("Exceeded max recursion depth")
-    }
-    let reduced_option = word_rectangle.reduce(counters);
-    let reduced = match reduced_option {
-        None => return None,
-        Some(r) => r,
-    };
-    let (y, x) = match reduced.find_fork_point() {
-        None => return Some(reduced),
-        Some(fork) => fork,
-    };
-    let options = reduced.row_matches[y].possible_chars(reduced.row_cache, x);
-    //dbg!(&reduced.row_matches, &reduced.col_matches);
-    //dbg!(y, x, options);
-    let mut pb = if show_pb {
-        Some(ProgressBar::new(options.len() as u64))
-    } else {
-        None
-    };
-    counters.step_calls += 1;
-    for cs in shard_chars(options) {
-        let mut fixed = reduced.clone();
-        fixed.row_matches[y].fix_chars_mut(x, cs, fixed.row_cache);
-        filter_chars(&mut fixed.row_matches[y], fixed.row_cache);
-        fixed.col_matches[x].fix_chars_mut(y, cs, fixed.col_cache);
-        filter_chars(&mut fixed.col_matches[x], fixed.col_cache);
-        let res = step_word_rectangle(fixed, false, recursion_depth + 1, counters);
-        if let Some(success) = res {
-            return Some(success);
+    let mut stack = vec![initial_word_rectangle];
+    while let Some(word_rectangle) = stack.pop() {
+        if recursion_depth > (word_rectangle.width() * word_rectangle.height() * 26) as u16 + 1 {
+            panic!("Exceeded max recursion depth")
         }
-        if let Some(p) = pb.as_mut() {
-            p.inc();
+        let reduced_option = word_rectangle.reduce(counters);
+        let reduced = match reduced_option {
+            None => continue,
+            Some(r) => r,
+        };
+        let (y, x) = match reduced.find_fork_point() {
+            None => return Some(reduced),
+            Some(fork) => fork,
+        };
+        let options = reduced.row_matches[y].possible_chars(reduced.row_cache, x);
+        //dbg!(&reduced.row_matches, &reduced.col_matches);
+        //dbg!(y, x, options);
+        counters.step_calls += 1;
+        for cs in shard_chars(options)
+            .collect::<Vec<EnumSet<Alpha>>>()
+            .into_iter()
+            .rev()
+        {
+            let mut fixed = reduced.clone();
+            fixed.row_matches[y].fix_chars_mut(x, cs, fixed.row_cache);
+            filter_chars(&mut fixed.row_matches[y], fixed.row_cache);
+            fixed.col_matches[x].fix_chars_mut(y, cs, fixed.col_cache);
+            filter_chars(&mut fixed.col_matches[x], fixed.col_cache);
+            stack.push(fixed);
         }
     }
     None

@@ -2,6 +2,7 @@
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::Stdout;
 extern crate bit_set;
 use bit_set::BitSet;
 extern crate bit_vec;
@@ -457,7 +458,7 @@ impl<'w> WordRectangle<'w> {
                     })
             })
             .filter_map(|(y, x, diff, slot_chars, slot_type)| {
-                if (diff.len() as f32) > slot_chars.len() as f32 * 0.00 {
+                if (diff.len() as f32) > slot_chars.len() as f32 * 0.30 {
                     Some((y, x, diff, slot_type))
                 } else {
                     None
@@ -508,8 +509,19 @@ impl<'w> WordRectangle<'w> {
                 constraint
                     .possible_chars
                     .iter()
+                    .zip(&self.col_matches)
                     .enumerate()
-                    .map(move |(x, possible_chars)| (y, x, possible_chars))
+                    .filter_map(move |(x, (possible_chars, col))| {
+                        let col_constraint = match col {
+                            WordsMatch::Matches(col_constraint) => &col_constraint,
+                            WordsMatch::Filled(_) => return None,
+                            WordsMatch::NoMatches => {
+                                panic!("Called find_fork_point on dead rectangle")
+                            }
+                            WordsMatch::Unconstrained => &self.col_cache.unconstrained,
+                        };
+                        Some((y, x, *possible_chars & col_constraint.possible_chars[y]))
+                    })
             })
             .filter(|(_, _, possible_chars)| possible_chars.len() > 1)
             .min_by_key(|(_, _, possible_chars)| possible_chars.len())

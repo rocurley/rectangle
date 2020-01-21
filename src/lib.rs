@@ -1,13 +1,8 @@
 #![allow(clippy::implicit_hasher)]
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::Stdout;
-extern crate bit_set;
-use bit_set::BitSet;
-extern crate bit_vec;
-use bit_vec::BitVec;
-use std::collections::HashMap;
 use std::iter::FromIterator;
 extern crate enumset;
 use enumset::{EnumSet, EnumSetType};
@@ -16,12 +11,15 @@ use enum_map::{Enum, EnumMap};
 extern crate itertools;
 use itertools::join;
 use std::hash::BuildHasher;
+use uset::USet;
 
 extern crate pbr;
 use pbr::ProgressBar;
 
 extern crate fnv;
 use fnv::FnvHashMap;
+
+pub mod uset;
 
 const EMPTY_ARRAY: [Alpha; 0] = [];
 
@@ -146,7 +144,7 @@ impl Counters {
 
 #[derive(Debug, Clone)]
 pub struct PartialConstraint {
-    words: BitSet,
+    words: USet,
     possible_chars: Vec<EnumSet<Alpha>>,
 }
 
@@ -234,12 +232,9 @@ impl<'w> WordsMatch<'w> {
             }
             NoMatches => NoMatches,
             Matches(mut constraint) => {
-                let merged_constraints =
-                    match union_constraints(cs.into_iter().map(|c| &cache.positions[ix][c])) {
-                        None => return NoMatches,
-                        Some(merged_constraints) => merged_constraints,
-                    };
-                constraint.intersect_with(&merged_constraints);
+                for other_constraint in cs.into_iter().map(|c| &cache.positions[ix][c]) {
+                    constraint.intersect_with(other_constraint);
+                }
                 Matches(constraint)
             }
             Unconstrained => {
@@ -301,10 +296,7 @@ fn filter_chars(matches: &mut WordsMatch, cache: &Cache) {
             .iter()
             .filter(|c| {
                 // Require a word with c at this position to be in words.
-                words
-                    .intersection(&cache_position[*c].words)
-                    .next()
-                    .is_some()
+                words.has_intersection(&cache_position[*c].words)
             })
             .collect()
     }
@@ -648,13 +640,13 @@ pub fn prepopulate_cache<'w>(
 pub fn create_cache(words: &CrushedWords) -> Cache {
     let l = words.word_len();
     let empty_map = (|_| PartialConstraint {
-        words: BitSet::new(),
+        words: USet::new(),
         possible_chars: vec![EnumSet::new(); l],
     })
     .into();
     let mut positions: Vec<EnumMap<Alpha, PartialConstraint>> = vec![empty_map; l];
     let mut unconstrained = PartialConstraint {
-        words: BitSet::from_bit_vec(BitVec::from_elem(words.len(), true)),
+        words: USet::populated_through(words.len()),
         possible_chars: vec![EnumSet::new(); l],
     };
     for (word_ix, word) in words.borrow().into_iter().enumerate() {

@@ -34,7 +34,7 @@ pub enum WordsMatch<'w> {
     Filled,
     BorrowedMatches { matches: &'w [&'w [AsciiChar]] },
 }
-use WordsMatch::*;
+use crate::WordsMatch::*;
 
 impl Ord for WordsMatch<'_> {
     fn cmp(&self, other: &WordsMatch) -> Ordering {
@@ -147,7 +147,7 @@ pub enum Slot {
     Row { y: usize },
     Col { x: usize },
 }
-use Slot::*;
+use crate::Slot::*;
 
 fn constraint_hash<'a, I>(iter: I) -> u128
 where

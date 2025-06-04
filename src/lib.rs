@@ -36,7 +36,7 @@ pub enum WordsMatch<'w> {
 }
 use WordsMatch::*;
 
-impl<'w> Ord for WordsMatch<'w> {
+impl Ord for WordsMatch<'_> {
     fn cmp(&self, other: &WordsMatch) -> Ordering {
         match (self, other) {
             (&Filled, &Filled) => Ordering::Equal,
@@ -45,29 +45,26 @@ impl<'w> Ord for WordsMatch<'w> {
             (&Unconstrained, &Unconstrained) => Ordering::Equal,
             (&Unconstrained, _) => Ordering::Greater,
             (_, &Unconstrained) => Ordering::Less,
-            (&BorrowedMatches { matches: ref l }, &BorrowedMatches { matches: ref r }) => {
+            (&BorrowedMatches { matches: l }, &BorrowedMatches { matches: r }) => {
                 l.len().cmp(&r.len())
             }
         }
     }
 }
 
-impl<'w> PartialOrd for WordsMatch<'w> {
+impl PartialOrd for WordsMatch<'_> {
     fn partial_cmp(&self, other: &WordsMatch) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'w> PartialEq for WordsMatch<'w> {
+impl PartialEq for WordsMatch<'_> {
     fn eq(&self, other: &WordsMatch) -> bool {
-        match self.cmp(other) {
-            Ordering::Equal => true,
-            _ => false,
-        }
+        self.cmp(other) == Ordering::Equal
     }
 }
 
-impl<'w> Eq for WordsMatch<'w> {}
+impl Eq for WordsMatch<'_> {}
 
 pub struct CrushedWords {
     length: usize,
@@ -88,7 +85,7 @@ impl<'a> FromIterator<&'a [AsciiChar]> for CrushedWords {
 }
 
 impl<'a> CrushedWords {
-    pub fn borrow(&'a self) -> BorrowedCrushedWords {
+    pub fn borrow(&'a self) -> BorrowedCrushedWords<'a> {
         BorrowedCrushedWords {
             length: self.length,
             chars: &self.chars,
@@ -113,7 +110,7 @@ impl<'a> CrushedWords {
             assert_eq!(self.length, v.len());
         }
         let return_slice_start = self.chars.len();
-        self.chars.extend_from_slice(&v);
+        self.chars.extend_from_slice(v);
         &self.chars[return_slice_start..]
     }
 }
@@ -132,7 +129,7 @@ impl<'w> IntoIterator for BorrowedCrushedWords<'w> {
     }
 }
 
-impl<'w> BorrowedCrushedWords<'w> {
+impl BorrowedCrushedWords<'_> {
     fn len(self) -> usize {
         self.chars.len() / self.length
     }
@@ -231,12 +228,12 @@ impl<'w> WordRectangle<'w> {
                     *prehash |= (ch as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
                     let cache_entry = cache.entry(*prehash);
                     let matches: &'w [&'w [AsciiChar]] =
-                        *cache_entry.or_insert_with(|| match *perp_match {
+                        cache_entry.or_insert_with(|| match *perp_match {
                             Filled => panic!("We should have already returned"),
                             // All single-character constraints are pre-populated into the cache,
                             // so a cache miss here means there's nothing to find.
                             Unconstrained => &EMPTY_NESTED_ARRAY,
-                            BorrowedMatches { ref matches } => slab
+                            BorrowedMatches { matches } => slab
                                 .alloc(
                                     matches
                                         .iter()
@@ -264,10 +261,10 @@ pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String
     join(rows, "\n")
 }
 
-pub fn step_word_rectangle<'w, 'a>(
+pub fn step_word_rectangle<'w>(
     words_by_length: &'w HashMap<usize, BorrowedCrushedWords<'w>>,
     slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-    caches: &'a mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
+    caches: &mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
     word_rectangle: WordRectangle<'w>,
     show_pb: bool,
 ) -> Option<Array2<Option<AsciiChar>>> {
@@ -280,13 +277,13 @@ pub fn step_word_rectangle<'w, 'a>(
         .row_matches
         .iter()
         .enumerate()
-        .min_by(|&(_, ref l_matches), &(_, ref r_matches)| l_matches.cmp(r_matches))
+        .min_by(|(_, l_matches), (_, r_matches)| l_matches.cmp(r_matches))
         .expect("Empty rows");
     let (best_col_ix, best_col_matches) = word_rectangle
         .col_matches
         .iter()
         .enumerate()
-        .min_by(|&(_, ref l_matches), &(_, ref r_matches)| l_matches.cmp(r_matches))
+        .min_by(|(_, l_matches), (_, r_matches)| l_matches.cmp(r_matches))
         .expect("Empty cols");
     let target_slot = if (&best_row_matches, unfiltered_row_candidates.len())
         < (&best_col_matches, unfiltered_col_candidates.len())
@@ -308,7 +305,7 @@ pub fn step_word_rectangle<'w, 'a>(
                 None
             };
             for word in matches {
-                for p in &mut pb {
+                if let Some(p) = pb.as_mut() {
                     p.inc();
                 }
                 {
@@ -334,7 +331,7 @@ pub fn step_word_rectangle<'w, 'a>(
                 None
             };
             for word in matches {
-                for p in &mut pb {
+                if let Some(p) = pb.as_mut() {
                     p.inc();
                 }
                 {
@@ -391,17 +388,17 @@ pub fn prepopulate_cache<'w>(
     let mut indices: HashMap<usize, FnvHashMap<(usize, AsciiChar), Vec<&[AsciiChar]>>> =
         HashMap::new();
     for (l, words) in words_by_length {
-        let index = indices.entry(*l).or_insert_with(FnvHashMap::default);
+        let index = indices.entry(*l).or_default();
         for word in words.borrow() {
             for (pos, &ch) in word.iter().enumerate() {
-                index.entry((pos, ch)).or_insert_with(Vec::new).push(word);
+                index.entry((pos, ch)).or_default().push(word);
             }
         }
     }
     let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> =
         FnvHashMap::default();
     for (l, index) in indices {
-        let cache = caches.entry(l).or_insert_with(FnvHashMap::default);
+        let cache = caches.entry(l).or_default();
         for ((pos, ch), matches) in index.into_iter() {
             let mut key = vec![None; l];
             key[pos] = Some(ch);

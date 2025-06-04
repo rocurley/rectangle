@@ -223,12 +223,12 @@ impl<'w> WordRectangle<'w> {
                 ),
             };
             Zip::from(word).and(perp_slots).and(perp_matches).apply(
-                |&c, mut perp_slot, (perp_match, prehash)| {
-                    perp_slot[pos] = Some(c);
+                |&ch, mut perp_slot, (perp_match, prehash)| {
+                    perp_slot[pos] = Some(ch);
                     if let Filled = *perp_match {
                         return;
                     }
-                    *prehash |= (c as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
+                    *prehash |= (ch as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
                     let cache_entry = cache.entry(*prehash);
                     let matches: &'w [&'w [AsciiChar]] =
                         *cache_entry.or_insert_with(|| match *perp_match {
@@ -241,7 +241,7 @@ impl<'w> WordRectangle<'w> {
                                     matches
                                         .iter()
                                         .cloned()
-                                        .filter(|word| word[pos] == c)
+                                        .filter(|word| word[pos] == ch)
                                         .collect::<Vec<&'w [AsciiChar]>>(),
                                 )
                                 .as_slice(),
@@ -258,7 +258,7 @@ impl<'w> WordRectangle<'w> {
 pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String {
     let rows = word_rectangle.outer_iter().map(|row| {
         row.iter()
-            .map(|c| c.map_or('.', |c| c.as_char()))
+            .map(|c| c.map_or('.', |ch| ch.as_char()))
             .collect::<String>()
     });
     join(rows, "\n")
@@ -314,8 +314,13 @@ pub fn step_word_rectangle<'w, 'a>(
                 {
                     let new_rectangle =
                         word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result =
-                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    let child_result = step_word_rectangle(
+                        words_by_length,
+                        slab,
+                        caches,
+                        new_rectangle,
+                        false,
+                    );
                     if child_result.is_some() {
                         return child_result;
                     }
@@ -335,8 +340,13 @@ pub fn step_word_rectangle<'w, 'a>(
                 {
                     let new_rectangle =
                         word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result =
-                        step_word_rectangle(words_by_length, slab, caches, new_rectangle, false);
+                    let child_result = step_word_rectangle(
+                        words_by_length,
+                        slab,
+                        caches,
+                        new_rectangle,
+                        false,
+                    );
                     if child_result.is_some() {
                         return child_result;
                     }
@@ -383,17 +393,18 @@ pub fn prepopulate_cache<'w>(
     for (l, words) in words_by_length {
         let index = indices.entry(*l).or_insert_with(FnvHashMap::default);
         for word in words.borrow() {
-            for (pos, &c) in word.iter().enumerate() {
-                index.entry((pos, c)).or_insert_with(Vec::new).push(word);
+            for (pos, &ch) in word.iter().enumerate() {
+                index.entry((pos, ch)).or_insert_with(Vec::new).push(word);
             }
         }
     }
-    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> = FnvHashMap::default();
+    let mut caches: FnvHashMap<usize, FnvHashMap<u128, &[&[AsciiChar]]>> =
+        FnvHashMap::default();
     for (l, index) in indices {
         let cache = caches.entry(l).or_insert_with(FnvHashMap::default);
-        for ((pos, c), matches) in index.into_iter() {
+        for ((pos, ch), matches) in index.into_iter() {
             let mut key = vec![None; l];
-            key[pos] = Some(c);
+            key[pos] = Some(ch);
             cache.insert(constraint_hash(key.iter()), slab.alloc(matches).as_slice());
         }
     }

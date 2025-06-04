@@ -9,12 +9,11 @@ use ascii::AsciiChar;
 extern crate ndarray;
 use ndarray::Array;
 
-use criterion::black_box;
 use criterion::{BenchmarkId, Criterion};
 
 extern crate rectangle;
 use rectangle::{
-    load_words, prepopulate_cache, step_word_rectangle, CrushedWords, WordRectangle, WordsMatch,
+    load_words, prepopulate_cache, step_word_rectangle, WordRectangle, WordsMatch,
 };
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -45,11 +44,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 }
                 let start = WordRectangle {
                     array: empty,
-                    row_matches: row_matches,
-                    col_matches: col_matches,
+                    row_matches,
+                    col_matches,
                 };
                 step_word_rectangle(
-                    &words_by_length_borrowed,
+                    words_by_length_borrowed,
                     &local_slab,
                     &mut local_caches,
                     start,

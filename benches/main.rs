@@ -57,7 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         },
     );
-    PROFILER.lock().unwrap().stop().unwrap();
+    // PROFILER.lock().unwrap().stop().unwrap();
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -4,7 +4,6 @@ extern crate cpuprofiler;
 extern crate typed_arena;
 use std::collections::HashMap;
 
-use cpuprofiler::PROFILER;
 extern crate ascii;
 extern crate ndarray;
 
@@ -31,7 +30,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         },
     );
-    // PROFILER.lock().unwrap().stop().unwrap();
 }
 
 criterion_group!(benches, criterion_benchmark);

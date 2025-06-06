@@ -173,12 +173,29 @@ enum SlotContent<'w> {
     Word(&'w [AsciiChar]),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WordRectangle<'w> {
     pub rows_fixed: usize,
     pub cols_fixed: usize,
     pub row_matches: Vec<SlotContent<'w>>,
     pub col_matches: Vec<SlotContent<'w>>,
+}
+impl<'w> Clone for WordRectangle<'w> {
+    fn clone(&self) -> Self {
+        Self {
+            rows_fixed: self.rows_fixed.clone(),
+            cols_fixed: self.cols_fixed.clone(),
+            row_matches: self.row_matches.clone(),
+            col_matches: self.col_matches.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.rows_fixed = source.rows_fixed;
+        self.cols_fixed = source.cols_fixed;
+        self.row_matches.clone_from(&source.row_matches);
+        self.col_matches.clone_from(&source.col_matches);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -260,6 +277,10 @@ impl<'w> WordRectangle<'w> {
     }
 
     pub fn solve(self) -> Option<Self> {
+        let mut scratch = Vec::new();
+        self.solve_inner(&mut scratch)
+    }
+    fn solve_inner(self, scratch: &mut Vec<Self>) -> Option<Self> {
         let (slot, possibilities) = match (
             self.row_matches.get(self.rows_fixed),
             self.col_matches.get(self.cols_fixed),
@@ -281,14 +302,22 @@ impl<'w> WordRectangle<'w> {
             _ => panic!("Current slot has a word already set"),
         };
         for i in 0..possibilities.word_count() {
-            let mut child = self.clone();
+            let mut child = match scratch.pop() {
+                Some(mut child) => {
+                    child.clone_from(&self);
+                    child
+                }
+                None => self.clone(),
+            };
             if child.pick_word(slot, i) == PickWordResult::Failure {
+                scratch.push(child);
                 continue;
             }
-            if let Some(solution) = child.solve() {
+            if let Some(solution) = child.solve_inner(scratch) {
                 return Some(solution);
             }
         }
+        scratch.push(self);
         None
     }
     pub fn show(&self) -> String {

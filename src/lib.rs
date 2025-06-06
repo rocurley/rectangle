@@ -1,21 +1,23 @@
-mod prefix;
+pub mod prefix;
 
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 
 extern crate ascii;
+use ascii::AsciiStr;
 use ascii::{AsciiChar, AsciiString};
+use prefix::PrefixTree;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::iter::FromIterator;
+use std::iter::{zip, FromIterator};
 
 extern crate itertools;
 use itertools::join;
 
 extern crate ndarray;
-use ndarray::{Array2, Zip};
+use ndarray::Array2;
 
 extern crate pbr;
 use pbr::ProgressBar;
@@ -27,7 +29,6 @@ extern crate typed_arena;
 use typed_arena::Arena;
 
 const EMPTY_ARRAY: [AsciiChar; 0] = [];
-const EMPTY_NESTED_ARRAY: [&[AsciiChar]; 0] = [];
 
 #[derive(Debug, Clone)]
 pub enum WordsMatch<'w> {
@@ -143,7 +144,7 @@ impl BorrowedCrushedWords<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Slot {
     Row { y: usize },
     Col { x: usize },
@@ -165,22 +166,52 @@ where
     hash
 }
 
+// TODO: annoying that this is 16 bytes.
+#[derive(Debug, Clone)]
+enum SlotContent<'w> {
+    Possibilities(&'w PrefixTree<'w>),
+    Word(&'w [AsciiChar]),
+}
+
 #[derive(Debug, Clone)]
 pub struct WordRectangle<'w> {
-    pub array: Array2<Option<AsciiChar>>,
-    pub row_matches: Vec<(WordsMatch<'w>, u128)>,
-    pub col_matches: Vec<(WordsMatch<'w>, u128)>,
+    pub rows_fixed: usize,
+    pub cols_fixed: usize,
+    pub row_matches: Vec<SlotContent<'w>>,
+    pub col_matches: Vec<SlotContent<'w>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum PickWordResult {
+    Failure,
+    Success,
 }
 
 impl<'w> WordRectangle<'w> {
-    fn lookup_slot_matches(&self, slot: &Slot) -> &(WordsMatch, u128) {
+    pub fn new(
+        width: usize,
+        height: usize,
+        indices: &'w HashMap<usize, PrefixTree<'w>>,
+    ) -> Self {
+        let row_tree = &indices[&width];
+        let row_matches = vec![SlotContent::Possibilities(row_tree); height];
+        let col_tree = &indices[&width];
+        let col_matches = vec![SlotContent::Possibilities(col_tree); width];
+        WordRectangle {
+            rows_fixed: 0,
+            cols_fixed: 0,
+            row_matches,
+            col_matches,
+        }
+    }
+    fn lookup_slot_matches(&self, slot: &Slot) -> &SlotContent {
         match *slot {
             Row { y } => &self.row_matches[y],
             Col { x } => &self.col_matches[x],
         }
     }
 
-    fn lookup_slot_matches_mut(&mut self, slot: &Slot) -> &mut (WordsMatch<'w>, u128) {
+    fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut SlotContent<'w> {
         match *slot {
             Row { y } => &mut self.row_matches[y],
             Col { x } => &mut self.col_matches[x],
@@ -188,171 +219,88 @@ impl<'w> WordRectangle<'w> {
     }
 
     fn width(&self) -> usize {
-        self.array.shape()[1]
+        self.col_matches.len()
     }
     fn height(&self) -> usize {
-        self.array.shape()[0]
+        self.row_matches.len()
     }
 
-    fn apply_constraint<'a, 'b, 'c>(
-        &'a self,
-        slot: &Slot,
-        word: &'b [AsciiChar],
-        slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-        caches: &'c mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
-    ) -> WordRectangle<'w> {
-        let mut new_rectangle: WordRectangle<'w> = (*self).clone();
-        {
-            let perp_len = match *slot {
-                Row { .. } => new_rectangle.height(),
-                Col { .. } => new_rectangle.width(),
+    fn pick_word(&mut self, slot: Slot, word_ix: usize) -> PickWordResult {
+        match slot {
+            Row { y } => {
+                assert_eq!(y, self.rows_fixed);
+                self.rows_fixed += 1;
+            }
+            Col { x } => {
+                assert_eq!(x, self.cols_fixed);
+                self.cols_fixed += 1;
+            }
+        };
+        let slot_contents = self.lookup_slot_matches_mut(&slot);
+        let SlotContent::Possibilities(tree) = *slot_contents else {
+            panic!("Tried to pick word when word was already fixed");
+        };
+        let new_word = tree.get_word(word_ix);
+        *slot_contents = SlotContent::Word(new_word);
+        let (perp_slots, char_ix) = match slot {
+            Row { y } => (&mut self.col_matches, y),
+            Col { x } => (&mut self.row_matches, x),
+        };
+        for (contents, ch) in zip(perp_slots, new_word) {
+            let SlotContent::Possibilities(tree) = *contents else {
+                continue;
             };
-            let cache = caches.get_mut(&perp_len).expect("Cache missing");
-            let (perp_slots, perp_matches, pos) = match *slot {
-                Row { y } => (
-                    new_rectangle.array.gencolumns_mut(),
-                    &mut new_rectangle.col_matches,
-                    y,
-                ),
-                Col { x } => (
-                    new_rectangle.array.genrows_mut(),
-                    &mut new_rectangle.row_matches,
-                    x,
-                ),
+            assert_eq!(char_ix, tree.prefix.len());
+            let Some(new) = tree.child(*ch) else {
+                return PickWordResult::Failure;
             };
-            Zip::from(word).and(perp_slots).and(perp_matches).apply(
-                |&ch, mut perp_slot, (perp_match, prehash)| {
-                    perp_slot[pos] = Some(ch);
-                    if let Filled = *perp_match {
-                        return;
-                    }
-                    *prehash |= (ch as u128 - 'a' as u128 + 1) << (5 * (perp_len - pos - 1));
-                    let cache_entry = cache.entry(*prehash);
-                    let matches: &'w [&'w [AsciiChar]] =
-                        cache_entry.or_insert_with(|| match *perp_match {
-                            Filled => panic!("We should have already returned"),
-                            // All single-character constraints are pre-populated into the cache,
-                            // so a cache miss here means there's nothing to find.
-                            Unconstrained => &EMPTY_NESTED_ARRAY,
-                            BorrowedMatches { matches } => slab
-                                .alloc(
-                                    matches
-                                        .iter()
-                                        .cloned()
-                                        .filter(|word| word[pos] == ch)
-                                        .collect::<Vec<&'w [AsciiChar]>>(),
-                                )
-                                .as_slice(),
-                        });
-                    *perp_match = BorrowedMatches { matches }
-                },
-            );
+            *contents = SlotContent::Possibilities(new);
         }
-        *new_rectangle.lookup_slot_matches_mut(slot) = (Filled, 0);
-        new_rectangle
+        PickWordResult::Success
     }
-}
 
-pub fn show_word_rectangle(word_rectangle: &Array2<Option<AsciiChar>>) -> String {
-    let rows = word_rectangle.outer_iter().map(|row| {
-        row.iter()
-            .map(|c| c.map_or('.', |ch| ch.as_char()))
-            .collect::<String>()
-    });
-    join(rows, "\n")
-}
-
-pub fn step_word_rectangle<'w>(
-    words_by_length: &'w HashMap<usize, BorrowedCrushedWords<'w>>,
-    slab: &'w Arena<Vec<&'w [AsciiChar]>>,
-    caches: &mut FnvHashMap<usize, FnvHashMap<u128, &'w [&'w [AsciiChar]]>>,
-    word_rectangle: WordRectangle<'w>,
-    show_pb: bool,
-) -> Option<Array2<Option<AsciiChar>>> {
-    let width = word_rectangle.array.shape()[1];
-    let height = word_rectangle.array.shape()[0];
-    let unfiltered_row_candidates = words_by_length[&width];
-    let unfiltered_col_candidates = words_by_length[&height];
-
-    let (best_row_ix, best_row_matches) = word_rectangle
-        .row_matches
-        .iter()
-        .enumerate()
-        .min_by(|(_, l_matches), (_, r_matches)| l_matches.cmp(r_matches))
-        .expect("Empty rows");
-    let (best_col_ix, best_col_matches) = word_rectangle
-        .col_matches
-        .iter()
-        .enumerate()
-        .min_by(|(_, l_matches), (_, r_matches)| l_matches.cmp(r_matches))
-        .expect("Empty cols");
-    let target_slot = if (&best_row_matches, unfiltered_row_candidates.len())
-        < (&best_col_matches, unfiltered_col_candidates.len())
-    {
-        Row { y: best_row_ix }
-    } else {
-        Col { x: best_col_ix }
-    };
-    match word_rectangle.lookup_slot_matches(&target_slot).0 {
-        Filled => return Some(word_rectangle.array.clone()),
-        Unconstrained => {
-            let matches = match target_slot {
-                Row { .. } => unfiltered_row_candidates.into_iter(),
-                Col { .. } => unfiltered_col_candidates.into_iter(),
-            };
-            let mut pb = if show_pb {
-                Some(ProgressBar::new(matches.len() as u64))
-            } else {
-                None
-            };
-            for word in matches {
-                if let Some(p) = pb.as_mut() {
-                    p.inc();
-                }
-                {
-                    let new_rectangle =
-                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result = step_word_rectangle(
-                        words_by_length,
-                        slab,
-                        caches,
-                        new_rectangle,
-                        false,
-                    );
-                    if child_result.is_some() {
-                        return child_result;
-                    }
+    pub fn solve(self) -> Option<Self> {
+        let (slot, possibilities) = match (
+            self.row_matches.get(self.rows_fixed),
+            self.col_matches.get(self.cols_fixed),
+        ) {
+            (None, None) => return Some(self),
+            (None, Some(SlotContent::Possibilities(p))) => {
+                (Slot::Col { x: self.cols_fixed }, p)
+            }
+            (Some(SlotContent::Possibilities(p)), None) => {
+                (Slot::Row { y: self.rows_fixed }, p)
+            }
+            (Some(SlotContent::Possibilities(row)), Some(SlotContent::Possibilities(col))) => {
+                if row.word_count() < col.word_count() {
+                    (Slot::Row { y: self.rows_fixed }, row)
+                } else {
+                    (Slot::Col { x: self.cols_fixed }, col)
                 }
             }
-        }
-        BorrowedMatches { matches } => {
-            let mut pb = if show_pb {
-                Some(ProgressBar::new(matches.len() as u64))
-            } else {
-                None
-            };
-            for word in matches {
-                if let Some(p) = pb.as_mut() {
-                    p.inc();
-                }
-                {
-                    let new_rectangle =
-                        word_rectangle.apply_constraint(&target_slot, word, slab, caches);
-                    let child_result = step_word_rectangle(
-                        words_by_length,
-                        slab,
-                        caches,
-                        new_rectangle,
-                        false,
-                    );
-                    if child_result.is_some() {
-                        return child_result;
-                    }
-                }
+            _ => panic!("Current slot has a word already set"),
+        };
+        for i in 0..possibilities.word_count() {
+            let mut child = self.clone();
+            if child.pick_word(slot, i) == PickWordResult::Failure {
+                continue;
+            }
+            if let Some(solution) = child.solve() {
+                return Some(solution);
             }
         }
-    };
-    None
+        None
+    }
+    pub fn show(&self) -> String {
+        let row_strs = self.row_matches.iter().map(|row| match row {
+            SlotContent::Possibilities(prefix_tree) => "?",
+            SlotContent::Word(ascii_chars) => {
+                let s: &AsciiStr = (*ascii_chars).into();
+                s.as_str()
+            }
+        });
+        join(row_strs, "\n")
+    }
 }
 
 pub fn load_words(

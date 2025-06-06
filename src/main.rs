@@ -1,25 +1,8 @@
-extern crate ascii;
-use ascii::AsciiChar;
-
-use std::time::Instant;
-
-extern crate ndarray;
-use ndarray::Array;
-
-extern crate cpuprofiler;
 use cpuprofiler::PROFILER;
+use std::{collections::HashMap, time::Instant};
 
-extern crate typed_arena;
-use typed_arena::Arena;
-
-#[macro_use]
-extern crate clap;
-
-extern crate rectangle;
-use rectangle::{
-    load_words, prepopulate_cache, show_word_rectangle, step_word_rectangle, WordRectangle,
-    WordsMatch::*,
-};
+use clap::clap_app;
+use rectangle::{load_words, prefix::PrefixTree, WordRectangle};
 
 fn main() {
     let config = clap_app!(rectangle =>
@@ -44,9 +27,11 @@ fn main() {
         (x, None) => x,
         (None, x) => x,
     };
-    let slab: Arena<Vec<&[AsciiChar]>> = Arena::new();
     let words_by_length = load_words(words_path, min_len, max_len);
-    let mut caches = prepopulate_cache(&slab, &words_by_length);
+    let indices: HashMap<_, _> = words_by_length
+        .iter()
+        .map(|(k, v)| (*k, PrefixTree::new(v.borrow())))
+        .collect();
     let mut dims = Vec::new();
     for x in words_by_length.keys() {
         for y in words_by_length.keys() {
@@ -55,26 +40,9 @@ fn main() {
             }
         }
     }
-    let words_by_length_borrowed = words_by_length
-        .iter()
-        .map(|(&l, words)| (l, words.borrow()))
-        .collect();
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
     for &(&w, &h) in dims.iter() {
-        let empty = Array::from_elem((h, w), None);
-        let mut row_matches = Vec::new();
-        for _ in 0..h {
-            row_matches.push((Unconstrained, 0))
-        }
-        let mut col_matches = Vec::new();
-        for _ in 0..w {
-            col_matches.push((Unconstrained, 0))
-        }
-        let start = WordRectangle {
-            array: empty,
-            row_matches,
-            col_matches,
-        };
+        let start = WordRectangle::new(w, h, &indices);
         println!("{}x{}", w, h);
         PROFILER
             .lock()
@@ -82,9 +50,9 @@ fn main() {
             .start(format!("profiling/{}x{}.profile", w, h))
             .unwrap();
         let start_time = Instant::now();
-        match step_word_rectangle(&words_by_length_borrowed, &slab, &mut caches, start, true) {
+        match start.solve() {
             None => println!("No rectangle found"),
-            Some(rect) => println!("Found:\n{}", show_word_rectangle(&rect)),
+            Some(rect) => println!("Found:\n{}", rect.show()),
         }
         let elapsed = start_time.elapsed();
         println!("{:?}", elapsed);

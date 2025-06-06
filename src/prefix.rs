@@ -18,11 +18,11 @@ pub struct PrefixTree<'words> {
 impl<'words> PrefixTree<'words> {
     // TODO: this could be done with a single scan instead of l scans, which is probably more
     // efficient.
-    pub fn new<'a>(words: BorrowedCrushedWords<'words>) -> Self {
+    pub fn new(words: BorrowedCrushedWords<'words>) -> Self {
         let mut root = PrefixTree {
             length: words.length,
             prefix: &EMPTY_ARRAY,
-            words: &words.chars,
+            words: words.chars,
             children: Vec::with_capacity(26),
         };
         recurse(&mut root);
@@ -50,7 +50,7 @@ impl<'words> PrefixTree<'words> {
     }
 }
 
-fn recurse<'a>(parent: &mut PrefixTree<'a>) {
+fn recurse(parent: &mut PrefixTree<'_>) {
     if parent.prefix.len() == parent.length {
         return;
     }

@@ -24,7 +24,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         &indices,
         |b, indices| {
             b.iter(|| {
-                let start = WordRectangle::new(DIM, DIM, &indices);
+                let start = WordRectangle::new(DIM, DIM, indices);
                 start.solve()
             })
         },

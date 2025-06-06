@@ -17,10 +17,8 @@ extern crate itertools;
 use itertools::join;
 
 extern crate ndarray;
-use ndarray::Array2;
 
 extern crate pbr;
-use pbr::ProgressBar;
 
 extern crate fnv;
 use fnv::FnvHashMap;
@@ -131,19 +129,6 @@ impl<'w> IntoIterator for BorrowedCrushedWords<'w> {
     }
 }
 
-impl BorrowedCrushedWords<'_> {
-    fn len(self) -> usize {
-        self.chars.len() / self.length
-    }
-    #[allow(dead_code)]
-    fn empty() -> Self {
-        BorrowedCrushedWords {
-            length: 1,
-            chars: &EMPTY_ARRAY,
-        }
-    }
-}
-
 #[derive(Debug, Copy, Clone)]
 pub enum Slot {
     Row { y: usize },
@@ -168,7 +153,7 @@ where
 
 // TODO: annoying that this is 16 bytes.
 #[derive(Debug, Clone)]
-enum SlotContent<'w> {
+pub enum SlotContent<'w> {
     Possibilities(&'w PrefixTree<'w>),
     Word(&'w [AsciiChar]),
 }
@@ -180,11 +165,11 @@ pub struct WordRectangle<'w> {
     pub row_matches: Vec<SlotContent<'w>>,
     pub col_matches: Vec<SlotContent<'w>>,
 }
-impl<'w> Clone for WordRectangle<'w> {
+impl Clone for WordRectangle<'_> {
     fn clone(&self) -> Self {
         Self {
-            rows_fixed: self.rows_fixed.clone(),
-            cols_fixed: self.cols_fixed.clone(),
+            rows_fixed: self.rows_fixed,
+            cols_fixed: self.cols_fixed,
             row_matches: self.row_matches.clone(),
             col_matches: self.col_matches.clone(),
         }
@@ -221,25 +206,12 @@ impl<'w> WordRectangle<'w> {
             col_matches,
         }
     }
-    fn lookup_slot_matches(&self, slot: &Slot) -> &SlotContent {
-        match *slot {
-            Row { y } => &self.row_matches[y],
-            Col { x } => &self.col_matches[x],
-        }
-    }
 
     fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut SlotContent<'w> {
         match *slot {
             Row { y } => &mut self.row_matches[y],
             Col { x } => &mut self.col_matches[x],
         }
-    }
-
-    fn width(&self) -> usize {
-        self.col_matches.len()
-    }
-    fn height(&self) -> usize {
-        self.row_matches.len()
     }
 
     fn pick_word(&mut self, slot: Slot, word_ix: usize) -> PickWordResult {
@@ -322,7 +294,7 @@ impl<'w> WordRectangle<'w> {
     }
     pub fn show(&self) -> String {
         let row_strs = self.row_matches.iter().map(|row| match row {
-            SlotContent::Possibilities(prefix_tree) => "?",
+            SlotContent::Possibilities(_) => "?",
             SlotContent::Word(ascii_chars) => {
                 let s: &AsciiStr = (*ascii_chars).into();
                 s.as_str()

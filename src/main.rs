@@ -1,4 +1,3 @@
-use cpuprofiler::PROFILER;
 use std::{collections::HashMap, time::Instant};
 
 use clap::clap_app;
@@ -43,19 +42,13 @@ fn main() {
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
     for &(&w, &h) in dims.iter() {
         let start = WordRectangle::new(w, h, &indices);
-        println!("{}x{}", w, h);
-        PROFILER
-            .lock()
-            .unwrap()
-            .start(format!("profiling/{}x{}.profile", w, h))
-            .unwrap();
+        print!("{}x{}:\t", w, h);
         let start_time = Instant::now();
         match start.solve() {
-            None => println!("No rectangle found"),
+            None => print!("no rectangle found "),
             Some(rect) => println!("Found:\n{}", rect.show()),
         }
         let elapsed = start_time.elapsed();
         println!("{:?}", elapsed);
-        PROFILER.lock().unwrap().stop().unwrap();
     }
 }

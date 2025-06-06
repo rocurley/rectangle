@@ -1,6 +1,5 @@
 #[macro_use]
 extern crate criterion;
-extern crate cpuprofiler;
 extern crate typed_arena;
 use std::collections::HashMap;
 

@@ -8,32 +8,19 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct WordRectangle<'w> {
-    pub rows_fixed: usize,
-    pub cols_fixed: usize,
-    pub row_matches: Vec<SlotContent<'w>>,
-    pub col_matches: Vec<SlotContent<'w>>,
-}
-
-// TODO: annoying that this is 16 bytes.
-#[derive(Debug, Clone)]
-pub enum SlotContent<'w> {
-    Possibilities(&'w PrefixTree<'w>),
-    Word(&'w [AsciiChar]),
+    pub row_matches: Vec<&'w PrefixTree<'w>>,
+    pub col_matches: Vec<&'w PrefixTree<'w>>,
 }
 
 impl Clone for WordRectangle<'_> {
     fn clone(&self) -> Self {
         Self {
-            rows_fixed: self.rows_fixed,
-            cols_fixed: self.cols_fixed,
             row_matches: self.row_matches.clone(),
             col_matches: self.col_matches.clone(),
         }
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.rows_fixed = source.rows_fixed;
-        self.cols_fixed = source.cols_fixed;
         self.row_matches.clone_from(&source.row_matches);
         self.col_matches.clone_from(&source.col_matches);
     }
@@ -63,42 +50,27 @@ impl<'w> WordRectangle<'w> {
         indices: &'w HashMap<usize, PrefixTree<'w>>,
     ) -> Self {
         let row_tree = &indices[&width];
-        let row_matches = vec![SlotContent::Possibilities(row_tree); height];
+        let row_matches = vec![row_tree; height];
         let col_tree = &indices[&width];
-        let col_matches = vec![SlotContent::Possibilities(col_tree); width];
+        let col_matches = vec![col_tree; width];
         WordRectangle {
-            rows_fixed: 0,
-            cols_fixed: 0,
             row_matches,
             col_matches,
         }
     }
 
-    fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut SlotContent<'w> {
+    fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut &'w PrefixTree<'w> {
         match *slot {
             Slot::Row { y } => &mut self.row_matches[y],
             Slot::Col { x } => &mut self.col_matches[x],
         }
     }
 
-    fn pick_word(&mut self, slot: Slot, word_ix: usize) -> PickWordResult {
-        match slot {
-            Slot::Row { y } => {
-                assert_eq!(y, self.rows_fixed);
-                self.rows_fixed += 1;
-            }
-            Slot::Col { x } => {
-                assert_eq!(x, self.cols_fixed);
-                self.cols_fixed += 1;
-            }
-        };
-        let slot_contents = self.lookup_slot_matches_mut(&slot);
-        let SlotContent::Possibilities(tree) = *slot_contents else {
-            panic!("Tried to pick word when word was already fixed");
-        };
+    fn pick_char(&mut self, slot: Slot, char_ix: usize) -> PickWordResult {
+        let tree = self.lookup_slot_matches_mut(&slot);
         let new_word = tree.get_word(word_ix);
         *slot_contents = SlotContent::Word(new_word);
-        let (perp_slots, char_ix) = match slot {
+        let (perp_slot, char_ix) = match slot {
             Slot::Row { y } => (&mut self.col_matches, y),
             Slot::Col { x } => (&mut self.row_matches, x),
         };

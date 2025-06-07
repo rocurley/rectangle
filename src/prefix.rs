@@ -13,6 +13,7 @@ pub struct PrefixTree<'words> {
     pub prefix: &'words [AsciiChar],
     // Implicitly to be read in chunks of length length
     pub words: &'words [AsciiChar],
+    pub valid_children: u32, //bitset
     children: Vec<Option<PrefixTree<'words>>>,
 }
 impl<'words> PrefixTree<'words> {
@@ -23,6 +24,7 @@ impl<'words> PrefixTree<'words> {
             length: words.length,
             prefix: &EMPTY_ARRAY,
             words: words.chars,
+            valid_children: 0,
             children: Vec::with_capacity(26),
         };
         recurse(&mut root);
@@ -57,7 +59,7 @@ fn recurse(parent: &mut PrefixTree<'_>) {
     let alphabet =
         (AsciiChar::a.as_byte()..=AsciiChar::z.as_byte()).map(|b| AsciiChar::from(b).unwrap());
     let mut remaining_words = parent.words;
-    for ch in alphabet {
+    for (i, ch) in alphabet.enumerate() {
         let split_idx = remaining_words
             .chunks_exact(parent.length)
             .position(|word| word[parent.prefix.len()] > ch);
@@ -77,11 +79,13 @@ fn recurse(parent: &mut PrefixTree<'_>) {
         if matching_words.is_empty() {
             parent.children.push(None);
         } else {
+            parent.valid_children |= 1 << i;
             let prefix_len = parent.prefix.len() + 1;
             let mut child = PrefixTree {
                 length: parent.length,
                 prefix: &matching_words[..prefix_len],
                 words: matching_words,
+                valid_children: 0,
                 children: Vec::with_capacity(26),
             };
             recurse(&mut child);

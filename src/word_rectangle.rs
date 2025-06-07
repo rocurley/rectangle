@@ -3,6 +3,7 @@ use ascii::{AsciiChar, AsciiStr};
 use itertools::join;
 use std::collections::HashMap;
 use std::iter::zip;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct WordRectangle<'w> {
@@ -38,7 +39,7 @@ impl Clone for WordRectangle<'_> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum Slot {
+enum Slot {
     Row { y: usize },
     Col { x: usize },
 }
@@ -47,6 +48,11 @@ pub enum Slot {
 pub enum PickWordResult {
     Failure,
     Success,
+}
+
+pub struct SolverStats {
+    pub runtime: Duration,
+    pub calls: u64,
 }
 
 impl<'w> WordRectangle<'w> {
@@ -108,11 +114,17 @@ impl<'w> WordRectangle<'w> {
         PickWordResult::Success
     }
 
-    pub fn solve(self) -> Option<Self> {
+    pub fn solve(self) -> (Option<Self>, SolverStats) {
         let mut scratch = Vec::new();
-        self.solve_inner(&mut scratch)
+        let mut calls = 0;
+        let start = Instant::now();
+        let out = self.solve_inner(&mut scratch, &mut calls);
+        let runtime = start.elapsed();
+        let stats = SolverStats { calls, runtime };
+        (out, stats)
     }
-    fn solve_inner(self, scratch: &mut Vec<Self>) -> Option<Self> {
+    fn solve_inner(self, scratch: &mut Vec<Self>, calls: &mut u64) -> Option<Self> {
+        *calls += 1;
         let (slot, possibilities) = match (
             self.row_matches.get(self.rows_fixed),
             self.col_matches.get(self.cols_fixed),
@@ -145,7 +157,7 @@ impl<'w> WordRectangle<'w> {
                 scratch.push(child);
                 continue;
             }
-            if let Some(solution) = child.solve_inner(scratch) {
+            if let Some(solution) = child.solve_inner(scratch, calls) {
                 return Some(solution);
             }
         }

@@ -42,8 +42,8 @@ fn main() {
     dims.sort_by_key(|&(x, y)| -((x * y) as i64));
     for &(&w, &h) in dims.iter() {
         let start = WordRectangle::new(w, h, &indices);
-        print!("{}x{}:\t", w, h);
         let (solution, stats) = start.solve();
+        print!("{}x{}:\t", w, h);
         print!("{:4.4}\t{:10}\t", stats.runtime.as_secs_f64(), stats.calls);
         match solution {
             None => println!("no rectangle found "),

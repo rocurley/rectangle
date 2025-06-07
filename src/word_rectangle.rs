@@ -1,6 +1,7 @@
 use super::prefix::PrefixTree;
 use ascii::{AsciiChar, AsciiStr};
 use itertools::join;
+use pbr::ProgressBar;
 use std::collections::HashMap;
 use std::iter::zip;
 use std::time::{Duration, Instant};
@@ -118,12 +119,17 @@ impl<'w> WordRectangle<'w> {
         let mut scratch = Vec::new();
         let mut calls = 0;
         let start = Instant::now();
-        let out = self.solve_inner(&mut scratch, &mut calls);
+        let out = self.solve_inner(&mut scratch, &mut calls, true);
         let runtime = start.elapsed();
         let stats = SolverStats { calls, runtime };
         (out, stats)
     }
-    fn solve_inner(self, scratch: &mut Vec<Self>, calls: &mut u64) -> Option<Self> {
+    fn solve_inner(
+        self,
+        scratch: &mut Vec<Self>,
+        calls: &mut u64,
+        show_progress: bool,
+    ) -> Option<Self> {
         *calls += 1;
         let (slot, possibilities) = match (
             self.row_matches.get(self.rows_fixed),
@@ -145,7 +151,15 @@ impl<'w> WordRectangle<'w> {
             }
             _ => panic!("Current slot has a word already set"),
         };
-        for i in 0..possibilities.word_count() {
+        let word_count = possibilities.word_count();
+        let mut pb = if show_progress {
+            let mut pb = ProgressBar::new(word_count as u64);
+            pb.tick();
+            Some(pb)
+        } else {
+            None
+        };
+        for i in 0..word_count {
             let mut child = match scratch.pop() {
                 Some(mut child) => {
                     child.clone_from(&self);
@@ -157,8 +171,11 @@ impl<'w> WordRectangle<'w> {
                 scratch.push(child);
                 continue;
             }
-            if let Some(solution) = child.solve_inner(scratch, calls) {
+            if let Some(solution) = child.solve_inner(scratch, calls, false) {
                 return Some(solution);
+            }
+            if let Some(pb) = pb.as_mut() {
+                pb.inc();
             }
         }
         scratch.push(self);

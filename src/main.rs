@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
 use clap::clap_app;
-use rectangle::{load_words, prefix::PrefixTree, WordRectangle};
+use rectangle::{load_words, prefix::PrefixTree, word_rectangle::WordRectangle};
 
 fn main() {
     let config = clap_app!(rectangle =>

@@ -1,29 +1,14 @@
 pub mod prefix;
+pub mod word_rectangle;
 
+use ascii::{AsciiChar, AsciiString};
+use fnv::FnvHashMap;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-
-extern crate ascii;
-use ascii::AsciiStr;
-use ascii::{AsciiChar, AsciiString};
-use prefix::PrefixTree;
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::iter::{zip, FromIterator};
-
-extern crate itertools;
-use itertools::join;
-
-extern crate ndarray;
-
-extern crate pbr;
-
-extern crate fnv;
-use fnv::FnvHashMap;
-
-extern crate typed_arena;
+use std::iter::FromIterator;
 use typed_arena::Arena;
 
 const EMPTY_ARRAY: [AsciiChar; 0] = [];
@@ -129,13 +114,6 @@ impl<'w> IntoIterator for BorrowedCrushedWords<'w> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum Slot {
-    Row { y: usize },
-    Col { x: usize },
-}
-use crate::Slot::*;
-
 fn constraint_hash<'a, I>(iter: I) -> u128
 where
     I: Iterator<Item = &'a Option<AsciiChar>>,
@@ -149,159 +127,6 @@ where
         };
     }
     hash
-}
-
-// TODO: annoying that this is 16 bytes.
-#[derive(Debug, Clone)]
-pub enum SlotContent<'w> {
-    Possibilities(&'w PrefixTree<'w>),
-    Word(&'w [AsciiChar]),
-}
-
-#[derive(Debug)]
-pub struct WordRectangle<'w> {
-    pub rows_fixed: usize,
-    pub cols_fixed: usize,
-    pub row_matches: Vec<SlotContent<'w>>,
-    pub col_matches: Vec<SlotContent<'w>>,
-}
-impl Clone for WordRectangle<'_> {
-    fn clone(&self) -> Self {
-        Self {
-            rows_fixed: self.rows_fixed,
-            cols_fixed: self.cols_fixed,
-            row_matches: self.row_matches.clone(),
-            col_matches: self.col_matches.clone(),
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.rows_fixed = source.rows_fixed;
-        self.cols_fixed = source.cols_fixed;
-        self.row_matches.clone_from(&source.row_matches);
-        self.col_matches.clone_from(&source.col_matches);
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum PickWordResult {
-    Failure,
-    Success,
-}
-
-impl<'w> WordRectangle<'w> {
-    pub fn new(
-        width: usize,
-        height: usize,
-        indices: &'w HashMap<usize, PrefixTree<'w>>,
-    ) -> Self {
-        let row_tree = &indices[&width];
-        let row_matches = vec![SlotContent::Possibilities(row_tree); height];
-        let col_tree = &indices[&width];
-        let col_matches = vec![SlotContent::Possibilities(col_tree); width];
-        WordRectangle {
-            rows_fixed: 0,
-            cols_fixed: 0,
-            row_matches,
-            col_matches,
-        }
-    }
-
-    fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut SlotContent<'w> {
-        match *slot {
-            Row { y } => &mut self.row_matches[y],
-            Col { x } => &mut self.col_matches[x],
-        }
-    }
-
-    fn pick_word(&mut self, slot: Slot, word_ix: usize) -> PickWordResult {
-        match slot {
-            Row { y } => {
-                assert_eq!(y, self.rows_fixed);
-                self.rows_fixed += 1;
-            }
-            Col { x } => {
-                assert_eq!(x, self.cols_fixed);
-                self.cols_fixed += 1;
-            }
-        };
-        let slot_contents = self.lookup_slot_matches_mut(&slot);
-        let SlotContent::Possibilities(tree) = *slot_contents else {
-            panic!("Tried to pick word when word was already fixed");
-        };
-        let new_word = tree.get_word(word_ix);
-        *slot_contents = SlotContent::Word(new_word);
-        let (perp_slots, char_ix) = match slot {
-            Row { y } => (&mut self.col_matches, y),
-            Col { x } => (&mut self.row_matches, x),
-        };
-        for (contents, ch) in zip(perp_slots, new_word) {
-            let SlotContent::Possibilities(tree) = *contents else {
-                continue;
-            };
-            assert_eq!(char_ix, tree.prefix.len());
-            let Some(new) = tree.child(*ch) else {
-                return PickWordResult::Failure;
-            };
-            *contents = SlotContent::Possibilities(new);
-        }
-        PickWordResult::Success
-    }
-
-    pub fn solve(self) -> Option<Self> {
-        let mut scratch = Vec::new();
-        self.solve_inner(&mut scratch)
-    }
-    fn solve_inner(self, scratch: &mut Vec<Self>) -> Option<Self> {
-        let (slot, possibilities) = match (
-            self.row_matches.get(self.rows_fixed),
-            self.col_matches.get(self.cols_fixed),
-        ) {
-            (None, None) => return Some(self),
-            (None, Some(SlotContent::Possibilities(p))) => {
-                (Slot::Col { x: self.cols_fixed }, p)
-            }
-            (Some(SlotContent::Possibilities(p)), None) => {
-                (Slot::Row { y: self.rows_fixed }, p)
-            }
-            (Some(SlotContent::Possibilities(row)), Some(SlotContent::Possibilities(col))) => {
-                if row.word_count() < col.word_count() {
-                    (Slot::Row { y: self.rows_fixed }, row)
-                } else {
-                    (Slot::Col { x: self.cols_fixed }, col)
-                }
-            }
-            _ => panic!("Current slot has a word already set"),
-        };
-        for i in 0..possibilities.word_count() {
-            let mut child = match scratch.pop() {
-                Some(mut child) => {
-                    child.clone_from(&self);
-                    child
-                }
-                None => self.clone(),
-            };
-            if child.pick_word(slot, i) == PickWordResult::Failure {
-                scratch.push(child);
-                continue;
-            }
-            if let Some(solution) = child.solve_inner(scratch) {
-                return Some(solution);
-            }
-        }
-        scratch.push(self);
-        None
-    }
-    pub fn show(&self) -> String {
-        let row_strs = self.row_matches.iter().map(|row| match row {
-            SlotContent::Possibilities(_) => "?",
-            SlotContent::Word(ascii_chars) => {
-                let s: &AsciiStr = (*ascii_chars).into();
-                s.as_str()
-            }
-        });
-        join(row_strs, "\n")
-    }
 }
 
 pub fn load_words(

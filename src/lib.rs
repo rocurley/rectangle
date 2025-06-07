@@ -136,7 +136,7 @@ pub fn load_words(
 ) -> HashMap<usize, CrushedWords> {
     let f = File::open(words_path).expect("Could not open file");
     let file = BufReader::new(&f);
-    let words: Vec<AsciiString> = file
+    let mut words: Vec<AsciiString> = file
         .lines()
         .map(|line| line.expect("Not a line or something"))
         .filter(|word| {
@@ -146,6 +146,7 @@ pub fn load_words(
         })
         .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
         .collect();
+    words.sort();
     let mut words_by_length = HashMap::new();
     for word in words.iter() {
         let l = word.len();

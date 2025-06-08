@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
 use clap::clap_app;
 use rectangle::{load_words, prefix::PrefixTree, word_rectangle::WordRectangle};

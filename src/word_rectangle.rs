@@ -3,7 +3,6 @@ use ascii::{AsciiChar, AsciiStr};
 use itertools::join;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use std::usize;
 
 #[derive(Debug)]
 pub struct WordRectangle<'w> {

@@ -46,16 +46,15 @@ impl<'w> WordRectangle<'w> {
     }
 
     pub fn solve(mut self) -> (Option<Self>, SolverStats) {
-        let mut scratch = Vec::new();
         let mut calls = 0;
         let start = Instant::now();
-        let solved = self.solve_inner(&mut scratch, &mut calls);
+        let solved = self.solve_inner(&mut calls);
         let out = if solved { Some(self) } else { None };
         let runtime = start.elapsed();
         let stats = SolverStats { calls, runtime };
         (out, stats)
     }
-    fn solve_inner(&mut self, scratch: &mut Vec<Self>, calls: &mut u64) -> bool {
+    fn solve_inner(&mut self, calls: &mut u64) -> bool {
         *calls += 1;
         let mut best_row = None;
         let mut best_count = u32::MAX;
@@ -100,7 +99,7 @@ impl<'w> WordRectangle<'w> {
             let col_backup = *col;
             *row = row.child(ch).expect("invalid char for row");
             *col = col.child(ch).expect("invalid char for col");
-            if self.solve_inner(scratch, calls) {
+            if self.solve_inner(calls) {
                 return true;
             }
             let row = &mut self.row_matches[row_ix];

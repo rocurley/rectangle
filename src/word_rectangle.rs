@@ -1,10 +1,9 @@
 use super::prefix::PrefixTree;
 use ascii::{AsciiChar, AsciiStr};
 use itertools::join;
-use pbr::ProgressBar;
 use std::collections::HashMap;
-use std::iter::zip;
 use std::time::{Duration, Instant};
+use std::usize;
 
 #[derive(Debug)]
 pub struct WordRectangle<'w> {
@@ -24,18 +23,6 @@ impl Clone for WordRectangle<'_> {
         self.row_matches.clone_from(&source.row_matches);
         self.col_matches.clone_from(&source.col_matches);
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-enum Slot {
-    Row { y: usize },
-    Col { x: usize },
-}
-
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum PickWordResult {
-    Failure,
-    Success,
 }
 
 pub struct SolverStats {
@@ -59,79 +46,61 @@ impl<'w> WordRectangle<'w> {
         }
     }
 
-    fn lookup_slot_matches_mut<'a>(&'a mut self, slot: &Slot) -> &'a mut &'w PrefixTree<'w> {
-        match *slot {
-            Slot::Row { y } => &mut self.row_matches[y],
-            Slot::Col { x } => &mut self.col_matches[x],
-        }
-    }
-
-    fn pick_char(&mut self, slot: Slot, char_ix: usize) -> PickWordResult {
-        let tree = self.lookup_slot_matches_mut(&slot);
-        let new_word = tree.get_word(word_ix);
-        *slot_contents = SlotContent::Word(new_word);
-        let (perp_slot, char_ix) = match slot {
-            Slot::Row { y } => (&mut self.col_matches, y),
-            Slot::Col { x } => (&mut self.row_matches, x),
-        };
-        for (contents, ch) in zip(perp_slots, new_word) {
-            let SlotContent::Possibilities(tree) = *contents else {
-                continue;
-            };
-            assert_eq!(char_ix, tree.prefix.len());
-            let Some(new) = tree.child(*ch) else {
-                return PickWordResult::Failure;
-            };
-            *contents = SlotContent::Possibilities(new);
-        }
-        PickWordResult::Success
+    fn pick_char(&mut self, row_ix: usize, ch: AsciiChar) {
+        let row = &mut self.row_matches[row_ix];
+        let col = &mut self.col_matches[row.prefix.len()];
+        *row = row.child(ch).expect("invalid char for row");
+        *col = col.child(ch).expect("invalid char for col");
     }
 
     pub fn solve(self) -> (Option<Self>, SolverStats) {
         let mut scratch = Vec::new();
         let mut calls = 0;
         let start = Instant::now();
-        let out = self.solve_inner(&mut scratch, &mut calls, true);
+        let out = self.solve_inner(&mut scratch, &mut calls);
         let runtime = start.elapsed();
         let stats = SolverStats { calls, runtime };
         (out, stats)
     }
-    fn solve_inner(
-        self,
-        scratch: &mut Vec<Self>,
-        calls: &mut u64,
-        show_progress: bool,
-    ) -> Option<Self> {
+    fn solve_inner(self, scratch: &mut Vec<Self>, calls: &mut u64) -> Option<Self> {
         *calls += 1;
-        let (slot, possibilities) = match (
-            self.row_matches.get(self.rows_fixed),
-            self.col_matches.get(self.cols_fixed),
-        ) {
-            (None, None) => return Some(self),
-            (None, Some(SlotContent::Possibilities(p))) => {
-                (Slot::Col { x: self.cols_fixed }, p)
+        let mut best_row = None;
+        let mut best_count = u32::MAX;
+        let mut best_mask = 0;
+        let mut prior_prefix_len = usize::MAX;
+        for (i, &row) in self.row_matches.iter().enumerate() {
+            let col_ready = row.prefix.len() < prior_prefix_len;
+            prior_prefix_len = row.prefix.len();
+            // col tree hasn't reached this row yet
+            if !col_ready {
+                continue;
             }
-            (Some(SlotContent::Possibilities(p)), None) => {
-                (Slot::Row { y: self.rows_fixed }, p)
+            // Row is complete
+            if row.prefix.len() == self.col_matches.len() {
+                continue;
             }
-            (Some(SlotContent::Possibilities(row)), Some(SlotContent::Possibilities(col))) => {
-                if row.word_count() < col.word_count() {
-                    (Slot::Row { y: self.rows_fixed }, row)
-                } else {
-                    (Slot::Col { x: self.cols_fixed }, col)
-                }
+            let col = self.col_matches[row.prefix.len()];
+            let mask = row.valid_children & col.valid_children;
+            // No possible values for this cell: short-circuit.
+            if mask == 0 {
+                scratch.push(self);
+                return None;
             }
-            _ => panic!("Current slot has a word already set"),
+            let count = mask.count_ones();
+            if count < best_count {
+                best_row = Some(i);
+                best_count = count;
+                best_mask = mask;
+            }
+        }
+        let Some(row_ix) = best_row else {
+            // All rows complete: we found it!
+            return Some(self);
         };
-        let word_count = possibilities.word_count();
-        let mut pb = if show_progress {
-            let mut pb = ProgressBar::new(word_count as u64);
-            pb.tick();
-            Some(pb)
-        } else {
-            None
-        };
-        for i in 0..word_count {
+        for i in 0..26 {
+            if (1 << i) & best_mask == 0 {
+                continue;
+            }
             let mut child = match scratch.pop() {
                 Some(mut child) => {
                     child.clone_from(&self);
@@ -139,27 +108,19 @@ impl<'w> WordRectangle<'w> {
                 }
                 None => self.clone(),
             };
-            if child.pick_word(slot, i) == PickWordResult::Failure {
-                scratch.push(child);
-                continue;
-            }
-            if let Some(solution) = child.solve_inner(scratch, calls, false) {
+            let ch = AsciiChar::from(AsciiChar::a.as_byte() + i).unwrap();
+            child.pick_char(row_ix, ch);
+            if let Some(solution) = child.solve_inner(scratch, calls) {
                 return Some(solution);
-            }
-            if let Some(pb) = pb.as_mut() {
-                pb.inc();
             }
         }
         scratch.push(self);
         None
     }
     pub fn show(&self) -> String {
-        let row_strs = self.row_matches.iter().map(|row| match row {
-            SlotContent::Possibilities(_) => "?",
-            SlotContent::Word(ascii_chars) => {
-                let s: &AsciiStr = (*ascii_chars).into();
-                s.as_str()
-            }
+        let row_strs = self.row_matches.iter().map(|row| {
+            let s: &AsciiStr = row.prefix.into();
+            s.as_str()
         });
         join(row_strs, "\n")
     }

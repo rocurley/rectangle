@@ -45,23 +45,17 @@ impl<'w> WordRectangle<'w> {
         }
     }
 
-    fn pick_char(&mut self, row_ix: usize, ch: AsciiChar) {
-        let row = &mut self.row_matches[row_ix];
-        let col = &mut self.col_matches[row.prefix.len()];
-        *row = row.child(ch).expect("invalid char for row");
-        *col = col.child(ch).expect("invalid char for col");
-    }
-
-    pub fn solve(self) -> (Option<Self>, SolverStats) {
+    pub fn solve(mut self) -> (Option<Self>, SolverStats) {
         let mut scratch = Vec::new();
         let mut calls = 0;
         let start = Instant::now();
-        let out = self.solve_inner(&mut scratch, &mut calls);
+        let solved = self.solve_inner(&mut scratch, &mut calls);
+        let out = if solved { Some(self) } else { None };
         let runtime = start.elapsed();
         let stats = SolverStats { calls, runtime };
         (out, stats)
     }
-    fn solve_inner(self, scratch: &mut Vec<Self>, calls: &mut u64) -> Option<Self> {
+    fn solve_inner(&mut self, scratch: &mut Vec<Self>, calls: &mut u64) -> bool {
         *calls += 1;
         let mut best_row = None;
         let mut best_count = u32::MAX;
@@ -82,8 +76,7 @@ impl<'w> WordRectangle<'w> {
             let mask = row.valid_children & col.valid_children;
             // No possible values for this cell: short-circuit.
             if mask == 0 {
-                scratch.push(self);
-                return None;
+                return false;
             }
             let count = mask.count_ones();
             if count < best_count {
@@ -94,27 +87,28 @@ impl<'w> WordRectangle<'w> {
         }
         let Some(row_ix) = best_row else {
             // All rows complete: we found it!
-            return Some(self);
+            return true;
         };
         for i in 0..26 {
             if (1 << i) & best_mask == 0 {
                 continue;
             }
-            let mut child = match scratch.pop() {
-                Some(mut child) => {
-                    child.clone_from(&self);
-                    child
-                }
-                None => self.clone(),
-            };
             let ch = AsciiChar::from(AsciiChar::a.as_byte() + i).unwrap();
-            child.pick_char(row_ix, ch);
-            if let Some(solution) = child.solve_inner(scratch, calls) {
-                return Some(solution);
+            let row = &mut self.row_matches[row_ix];
+            let row_backup = *row;
+            let col = &mut self.col_matches[row.prefix.len()];
+            let col_backup = *col;
+            *row = row.child(ch).expect("invalid char for row");
+            *col = col.child(ch).expect("invalid char for col");
+            if self.solve_inner(scratch, calls) {
+                return true;
             }
+            let row = &mut self.row_matches[row_ix];
+            *row = row_backup;
+            let col = &mut self.col_matches[row.prefix.len()];
+            *col = col_backup;
         }
-        scratch.push(self);
-        None
+        false
     }
     pub fn show(&self) -> String {
         let row_strs = self.row_matches.iter().map(|row| {

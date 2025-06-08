@@ -9,7 +9,7 @@ extern crate ndarray;
 use criterion::{BenchmarkId, Criterion};
 
 extern crate rectangle;
-use rectangle::{load_words, prefix::PrefixTree, WordRectangle};
+use rectangle::{load_words, prefix::PrefixTree, word_rectangle::WordRectangle};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let words_path = "/usr/share/dict/words";

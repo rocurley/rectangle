@@ -29,6 +29,12 @@ pub struct SolverStats {
     pub calls: u64,
 }
 
+enum BestCell {
+    Complete,
+    Failure,
+    Cell { row: usize, mask: u32 },
+}
+
 impl<'w> WordRectangle<'w> {
     pub fn new(
         width: usize,
@@ -56,6 +62,33 @@ impl<'w> WordRectangle<'w> {
     }
     fn solve_inner(&mut self, calls: &mut u64) -> bool {
         *calls += 1;
+        let (row_ix, mask) = match self.best_cell() {
+            BestCell::Complete => return true,
+            BestCell::Failure => return false,
+            BestCell::Cell { row, mask } => (row, mask),
+        };
+        let col_ix = self.row_matches[row_ix].prefix.len();
+        for i in 0..26 {
+            if (1 << i) & mask == 0 {
+                continue;
+            }
+            let ch = AsciiChar::from(AsciiChar::a.as_byte() + i).unwrap();
+            let row = &mut self.row_matches[row_ix];
+            let col = &mut self.col_matches[col_ix];
+            let row_backup = *row;
+            let col_backup = *col;
+            *row = row.child(ch).expect("invalid char for row");
+            *col = col.child(ch).expect("invalid char for col");
+            if self.solve_inner(calls) {
+                return true;
+            }
+            self.row_matches[row_ix] = row_backup;
+            self.col_matches[col_ix] = col_backup;
+        }
+        false
+    }
+
+    fn best_cell(&mut self) -> BestCell {
         let mut best_row = None;
         let mut best_count = u32::MAX;
         let mut best_mask = 0;
@@ -75,7 +108,7 @@ impl<'w> WordRectangle<'w> {
             let mask = row.valid_children & col.valid_children;
             // No possible values for this cell: short-circuit.
             if mask == 0 {
-                return false;
+                return BestCell::Failure;
             }
             let count = mask.count_ones();
             if count < best_count {
@@ -84,30 +117,13 @@ impl<'w> WordRectangle<'w> {
                 best_mask = mask;
             }
         }
-        let Some(row_ix) = best_row else {
-            // All rows complete: we found it!
-            return true;
-        };
-        for i in 0..26 {
-            if (1 << i) & best_mask == 0 {
-                continue;
-            }
-            let ch = AsciiChar::from(AsciiChar::a.as_byte() + i).unwrap();
-            let row = &mut self.row_matches[row_ix];
-            let row_backup = *row;
-            let col = &mut self.col_matches[row.prefix.len()];
-            let col_backup = *col;
-            *row = row.child(ch).expect("invalid char for row");
-            *col = col.child(ch).expect("invalid char for col");
-            if self.solve_inner(calls) {
-                return true;
-            }
-            let row = &mut self.row_matches[row_ix];
-            *row = row_backup;
-            let col = &mut self.col_matches[row.prefix.len()];
-            *col = col_backup;
+        match best_row {
+            None => BestCell::Complete,
+            Some(best_row) => BestCell::Cell {
+                row: best_row,
+                mask: best_mask,
+            },
         }
-        false
     }
     pub fn show(&self) -> String {
         let row_strs = self.row_matches.iter().map(|row| {

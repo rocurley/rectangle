@@ -26,6 +26,7 @@ impl Clone for WordRectangle<'_> {
 
 pub struct SolverStats {
     pub runtime: Duration,
+    pub best_cell_runtime: Duration,
     pub calls: u64,
 }
 
@@ -52,21 +53,26 @@ impl<'w> WordRectangle<'w> {
     }
 
     pub fn solve(mut self) -> (Option<Self>, SolverStats) {
-        let mut calls = 0;
+        let mut stats = SolverStats {
+            calls: 0,
+            best_cell_runtime: Duration::ZERO,
+            runtime: Duration::ZERO,
+        };
         let start = Instant::now();
-        let solved = self.solve_inner(&mut calls);
+        let solved = self.solve_inner(&mut stats);
         let out = if solved { Some(self) } else { None };
-        let runtime = start.elapsed();
-        let stats = SolverStats { calls, runtime };
+        stats.runtime = start.elapsed();
         (out, stats)
     }
-    fn solve_inner(&mut self, calls: &mut u64) -> bool {
-        *calls += 1;
+    fn solve_inner(&mut self, stats: &mut SolverStats) -> bool {
+        stats.calls += 1;
+        let best_cell_start = Instant::now();
         let (row_ix, mask) = match self.best_cell() {
             BestCell::Complete => return true,
             BestCell::Failure => return false,
             BestCell::Cell { row, mask } => (row, mask),
         };
+        stats.best_cell_runtime += best_cell_start.elapsed();
         let col_ix = self.row_matches[row_ix].prefix.len();
         for i in 0..26 {
             if (1 << i) & mask == 0 {
@@ -79,7 +85,7 @@ impl<'w> WordRectangle<'w> {
             let col_backup = *col;
             *row = row.child(ch).expect("invalid char for row");
             *col = col.child(ch).expect("invalid char for col");
-            if self.solve_inner(calls) {
+            if self.solve_inner(stats) {
                 return true;
             }
             self.row_matches[row_ix] = row_backup;

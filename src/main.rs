@@ -44,7 +44,12 @@ fn main() {
         let start = WordRectangle::new(w, h, &indices);
         let (solution, stats) = start.solve();
         print!("{}x{}:\t", w, h);
-        print!("{:4.4}\t{:10}\t", stats.runtime.as_secs_f64(), stats.calls);
+        print!(
+            "{:4.4}\t{:4.4}\t{:10}\t",
+            stats.runtime.as_secs_f64(),
+            stats.best_cell_runtime.as_secs_f64(),
+            stats.calls
+        );
         match solution {
             None => println!("no rectangle found "),
             Some(rect) => println!("Found:\n{}", rect.show()),

@@ -1,10 +1,5 @@
-#[macro_use]
-extern crate criterion;
-extern crate typed_arena;
+use criterion::{criterion_group, criterion_main};
 use std::collections::HashMap;
-
-extern crate ascii;
-extern crate ndarray;
 
 use criterion::{BenchmarkId, Criterion};
 

@@ -80,7 +80,7 @@ pub fn load_words(
         .filter(|word| {
             word.chars().all(|c| c.is_ascii_lowercase())
                 && word.len() >= min_len
-                && max_len.map_or(true, |max| word.len() < max)
+                && max_len.is_none_or(|max| word.len() < max)
         })
         .map(|word| AsciiString::from_ascii(word).expect("Somehow not ascii"))
         .collect();

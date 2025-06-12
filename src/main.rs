@@ -34,7 +34,7 @@ fn main() {
     let mut dims = Vec::new();
     for x in words_by_length.keys() {
         for y in words_by_length.keys() {
-            if (x >= y) && skip.map_or(true, |s| x * y < s) {
+            if (x >= y) && skip.is_none_or(|s| x * y < s) {
                 dims.push((x, y));
             }
         }

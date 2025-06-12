@@ -44,7 +44,7 @@ impl<'w> WordRectangle<'w> {
     ) -> Self {
         let row_tree = &indices[&width];
         let row_matches = vec![row_tree; height];
-        let col_tree = &indices[&width];
+        let col_tree = &indices[&height];
         let col_matches = vec![col_tree; width];
         WordRectangle {
             row_matches,

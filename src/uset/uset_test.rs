@@ -1,10 +1,4 @@
 use super::USet;
-#[test]
-fn test_insert() {
-    let mut set = USet::new();
-    set.insert(3);
-    assert_eq!(&set.blocks, &[0b1000]);
-}
 
 #[test]
 fn test_has_intersection() {

@@ -1,15 +1,15 @@
 #[macro_use]
 extern crate criterion;
 extern crate cpuprofiler;
-use cpuprofiler::PROFILER;
 use criterion::{BenchmarkId, Criterion};
 extern crate rectangle;
-use rectangle::{load_words, prepopulate_cache, step_word_rectangle, WordRectangle, WordsMatch};
+use rectangle::{
+    load_words, prepopulate_cache, step_word_rectangle, Counters, WordRectangle, WordsMatch,
+};
 extern crate rand;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-extern crate bit_vec;
-use bit_vec::BitVec;
 extern crate bit_set;
+extern crate bit_vec;
 use bit_set::BitSet;
 use rand::seq::SliceRandom;
 use rectangle::uset::USet;
@@ -38,11 +38,11 @@ fn step_benchmark(c: &mut Criterion) {
                     col_cache: &caches[&DIM],
                     col_matches: col_matches,
                 };
-                step_word_rectangle(start, false, 0)
+                let mut counters = Counters::new();
+                step_word_rectangle(start, false, 0, &mut counters)
             })
         },
     );
-    PROFILER.lock().unwrap().stop().unwrap();
 }
 
 fn bitset_native_intersection(c: &mut Criterion) {
@@ -86,7 +86,7 @@ fn bitset_uset_intersection(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    //step_benchmark,
+    step_benchmark,
     bitset_native_intersection,
     bitset_optimized_intersection,
     bitset_uset_intersection,

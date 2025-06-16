@@ -1,4 +1,6 @@
 extern crate proptest;
+use proptest::collection::vec;
+
 use self::proptest::prelude::*;
 use self::proptest::sample::subsequence;
 use std::collections::HashMap;
@@ -23,7 +25,7 @@ fn test_step_2x2_multiple() {
     }
 }
 
-fn words_strategy(words_path: &str, len: usize) -> impl Strategy<Value = Vec<Vec<Alpha>>> {
+fn file_words_strategy(words_path: &str, len: usize) -> impl Strategy<Value = Vec<Vec<Alpha>>> {
     let f = File::open(words_path).expect("Could not open file");
     let file = BufReader::new(&f);
     let words: Vec<Vec<Alpha>> = file
@@ -36,9 +38,13 @@ fn words_strategy(words_path: &str, len: usize) -> impl Strategy<Value = Vec<Vec
     subsequence(words, range)
 }
 
+fn words_strategy(word_len: usize, max_len: usize) -> impl Strategy<Value = Vec<Vec<Alpha>>> {
+    vec(vec(Alpha::arbitrary(), word_len), 0..max_len)
+}
+
 proptest! {
     #[test]
-    fn test_prop(words in words_strategy("/usr/share/dict/words", 2)) {
+    fn test_prop(words in file_words_strategy("/usr/share/dict/words", 2)) {
         let crushed :CrushedWords= words.iter().map(Vec::as_slice).collect();
         let mut words_by_length = HashMap::new();
         words_by_length.insert(2, crushed);
